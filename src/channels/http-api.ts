@@ -21,7 +21,26 @@ import https from 'https';
 import url from 'url';
 import { registerChannel, ChannelOpts } from './registry.js';
 import { Channel, NewMessage, RegisteredGroup, AgentProfile } from '../types.js';
-import { addProfile, getProfiles, getProfile, updateProfile, removeProfile, triggerExists } from '../db.js';
+import {
+  addProfile,
+  getProfiles,
+  getProfile,
+  updateProfile,
+  removeProfile,
+  triggerExists,
+  getAssignedSkills,
+  isSkillAssigned,
+  assignSkill,
+  removeSkillAssignment,
+} from '../db.js';
+import {
+  listGlobalSkills,
+  getGlobalSkill,
+  createGlobalSkill,
+  updateGlobalSkill,
+  deleteGlobalSkill,
+  skillExists,
+} from '../skill-manager.js';
 import { logger } from '../logger.js';
 
 // Outbound message queue (in-memory, for polling mode)
@@ -229,6 +248,17 @@ class HttpApiChannel implements Channel {
       this.handleUpdateProfile(pathname, req, res);
     } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) && method === 'DELETE') {
       this.handleRemoveProfile(pathname, res);
+    // --- Global skills management ---
+    } else if (pathname === '/api/skills' && method === 'GET') {
+      this.handleListSkills(res);
+    } else if (pathname?.startsWith('/api/skills/') && method === 'GET') {
+      this.handleGetSkill(pathname, res);
+    } else if (pathname?.startsWith('/api/skills/') && method === 'POST') {
+      this.handleCreateSkill(pathname, req, res);
+    } else if (pathname?.startsWith('/api/skills/') && method === 'PUT') {
+      this.handleUpdateSkill(pathname, req, res);
+    } else if (pathname?.startsWith('/api/skills/') && method === 'DELETE') {
+      this.handleDeleteSkill(pathname, res);
     } else {
       res.writeHead(404);
       res.end(JSON.stringify({ error: 'Not found' }));
@@ -695,6 +725,115 @@ class HttpApiChannel implements Channel {
       jid,
       profileId,
     }));
+  }
+
+  // --- Global skills management handlers ---
+
+  private handleListSkills(res: http.ServerResponse): void {
+    const skills = listGlobalSkills();
+    res.writeHead(200);
+    res.end(JSON.stringify({ skills, count: skills.length }));
+  }
+
+  private handleGetSkill(pathname: string, res: http.ServerResponse): void {
+    const skillId = pathname.replace('/api/skills/', '');
+    const skill = getGlobalSkill(skillId);
+
+    if (!skill) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Skill not found', skillId }));
+      return;
+    }
+
+    res.writeHead(200);
+    res.end(JSON.stringify(skill));
+  }
+
+  private async handleCreateSkill(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    try {
+      const skillId = pathname.replace('/api/skills/', '');
+
+      if (skillExists(skillId)) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Skill already exists', skillId }));
+        return;
+      }
+
+      const body = await this.readBody(req);
+      const data = JSON.parse(body);
+
+      if (!data.content) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Missing required field: content' }));
+        return;
+      }
+
+      createGlobalSkill(skillId, data.content);
+
+      logger.info({ channel: this.name, skillId }, 'Skill created');
+
+      res.writeHead(200);
+      res.end(JSON.stringify({ status: 'ok', id: skillId }));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ channel: this.name, error: errorMessage }, 'Failed to create skill');
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: errorMessage }));
+    }
+  }
+
+  private async handleUpdateSkill(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    try {
+      const skillId = pathname.replace('/api/skills/', '');
+
+      if (!skillExists(skillId)) {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'Skill not found', skillId }));
+        return;
+      }
+
+      const body = await this.readBody(req);
+      const data = JSON.parse(body);
+
+      if (!data.content) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Missing required field: content' }));
+        return;
+      }
+
+      updateGlobalSkill(skillId, data.content);
+
+      logger.info({ channel: this.name, skillId }, 'Skill updated');
+
+      res.writeHead(200);
+      res.end(JSON.stringify({ status: 'ok', id: skillId }));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ channel: this.name, error: errorMessage }, 'Failed to update skill');
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: errorMessage }));
+    }
+  }
+
+  private handleDeleteSkill(pathname: string, res: http.ServerResponse): void {
+    const skillId = pathname.replace('/api/skills/', '');
+
+    if (!skillExists(skillId)) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Skill not found', skillId }));
+      return;
+    }
+
+    try {
+      deleteGlobalSkill(skillId);
+      logger.info({ channel: this.name, skillId }, 'Skill deleted');
+      res.writeHead(200);
+      res.end(JSON.stringify({ status: 'ok', id: skillId }));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: errorMessage }));
+    }
   }
 
   private readBody(req: http.IncomingMessage): Promise<string> {
