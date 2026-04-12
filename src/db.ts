@@ -99,6 +99,17 @@ function createSchema(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_profiles_jid ON agent_profiles(jid);
     CREATE INDEX IF NOT EXISTS idx_profiles_trigger ON agent_profiles(trigger);
+
+    -- Profile skills: 将全局 skill 分配给特定的 profile
+    CREATE TABLE IF NOT EXISTS profile_skills (
+      jid TEXT NOT NULL,
+      profile_id TEXT NOT NULL,
+      skill_id TEXT NOT NULL,
+      assigned_at TEXT NOT NULL,
+      PRIMARY KEY (jid, profile_id, skill_id),
+      FOREIGN KEY (jid, profile_id) REFERENCES agent_profiles(jid, id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_profile_skills_lookup ON profile_skills(jid, profile_id);
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -1028,6 +1039,46 @@ function migrateLegacyGroupsToProfiles(database: Database.Database): void {
       'Migrated legacy group to profiles format',
     );
   }
+}
+
+// --- Profile Skills accessors ---
+
+/**
+ * Get all skills assigned to a profile
+ */
+export function getAssignedSkills(jid: string, profileId: string): string[] {
+  const rows = db
+    .prepare('SELECT skill_id FROM profile_skills WHERE jid = ? AND profile_id = ? ORDER BY assigned_at')
+    .all(jid, profileId) as Array<{ skill_id: string }>;
+  return rows.map((row) => row.skill_id);
+}
+
+/**
+ * Check if a skill is assigned to a profile
+ */
+export function isSkillAssigned(jid: string, profileId: string, skillId: string): boolean {
+  const row = db
+    .prepare('SELECT 1 FROM profile_skills WHERE jid = ? AND profile_id = ? AND skill_id = ?')
+    .get(jid, profileId, skillId) as { 1: number } | undefined;
+  return !!row;
+}
+
+/**
+ * Assign a skill to a profile
+ */
+export function assignSkill(jid: string, profileId: string, skillId: string): void {
+  db.prepare(
+    'INSERT INTO profile_skills (jid, profile_id, skill_id, assigned_at) VALUES (?, ?, ?, ?)',
+  ).run(jid, profileId, skillId, new Date().toISOString());
+}
+
+/**
+ * Remove a skill from a profile
+ */
+export function removeSkillAssignment(jid: string, profileId: string, skillId: string): void {
+  db.prepare(
+    'DELETE FROM profile_skills WHERE jid = ? AND profile_id = ? AND skill_id = ?',
+  ).run(jid, profileId, skillId);
 }
 
 function migrateJsonState(): void {
