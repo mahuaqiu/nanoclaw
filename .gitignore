@@ -9,6 +9,9 @@ store/
 data/
 logs/
 
+# Docker volume (本地持久化目录)
+docker_volume/
+
 # Groups - only track base structure and specific CLAUDE.md files
 groups/*
 !groups/main/

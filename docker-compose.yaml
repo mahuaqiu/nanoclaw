@@ -12,11 +12,11 @@ services:
     # 挂载 Docker socket，让 NanoClaw 能启动 agent 容器
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # 持久化存储目录
-      - nanoclaw-store:/app/store
-      - nanoclaw-groups:/app/groups
-      - nanoclaw-data:/app/data
-      - nanoclaw-logs:/app/logs
+      # 持久化存储目录（本地路径）
+      - ./docker_volume/store:/app/store
+      - ./docker_volume/groups:/app/groups
+      - ./docker_volume/data:/app/data
+      - ./docker_volume/logs:/app/logs
 
     # 暴露 HTTP API 端口（用于自建 REST 接口）
     ports:
@@ -24,7 +24,7 @@ services:
       # 配置文件（如果需要自定义配置，取消下面的注释）
       # - ./env:/app/.env:ro
       # WhatsApp 认证文件（如果使用 WhatsApp，取消下面的注释）
-      # - nanoclaw-auth:/app/store/auth
+      # - ./docker_volume/auth:/app/store/auth
 
     environment:
       # ===== 助手配置 =====
@@ -88,20 +88,3 @@ services:
       # - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
 
       # ===== Apple Container 凭据代理配置 =====
-      # 如果使用 Apple Container 运行时，使用以下配置
-      # - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-
-# 持久化卷定义
-volumes:
-  nanoclaw-store:
-    name: nanoclaw-store
-  nanoclaw-groups:
-    name: nanoclaw-groups
-  nanoclaw-data:
-    name: nanoclaw-data
-  nanoclaw-logs:
-    name: nanoclaw-logs
-  # WhatsApp 认证文件卷（如果使用 WhatsApp，取消下面的注释）
-  # nanoclaw-auth:
-  #   name: nanoclaw-auth
