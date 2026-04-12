@@ -21,7 +21,9 @@
       "Bash(curl:*)",
       "Bash(docker pull:*)",
       "Bash(docker tag:*)",
-      "Bash(sudo ls:*)"
+      "Bash(sudo ls:*)",
+      "Bash(npm test:*)",
+      "Bash(npm rebuild:*)"
     ]
   }
 }

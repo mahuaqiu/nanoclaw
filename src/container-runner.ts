@@ -46,6 +46,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  profileId?: string; // Profile ID for multi-profile support
   script?: string;
 }
 
@@ -65,6 +66,7 @@ interface VolumeMount {
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
+  profileId?: string,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -109,6 +111,21 @@ function buildVolumeMounts(
       readonly: false,
     });
 
+    // Profile-specific CLAUDE.md for main group
+    if (profileId) {
+      const profileClaudeMdDir = path.join(groupDir, 'profiles', profileId);
+      if (fs.existsSync(profileClaudeMdDir)) {
+        const profileClaudeMd = path.join(profileClaudeMdDir, 'CLAUDE.md');
+        if (fs.existsSync(profileClaudeMd)) {
+          mounts.push({
+            hostPath: profileClaudeMd,
+            containerPath: '/workspace/profile/CLAUDE.md',
+            readonly: true,
+          });
+        }
+      }
+    }
+
     // Global memory directory — writable for main so it can update shared context
     const globalDir = path.join(GROUPS_DIR, 'global');
     if (fs.existsSync(globalDir)) {
@@ -125,6 +142,21 @@ function buildVolumeMounts(
       containerPath: '/workspace/group',
       readonly: false,
     });
+
+    // Profile-specific CLAUDE.md for non-main groups
+    if (profileId) {
+      const profileClaudeMdDir = path.join(groupDir, 'profiles', profileId);
+      if (fs.existsSync(profileClaudeMdDir)) {
+        const profileClaudeMd = path.join(profileClaudeMdDir, 'CLAUDE.md');
+        if (fs.existsSync(profileClaudeMd)) {
+          mounts.push({
+            hostPath: profileClaudeMd,
+            containerPath: '/workspace/profile/CLAUDE.md',
+            readonly: true,
+          });
+        }
+      }
+    }
 
     // Global memory directory (read-only for non-main)
     // Only directory mounts are supported, not file mounts
@@ -244,7 +276,7 @@ function buildVolumeMounts(
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
       group.containerConfig.additionalMounts,
-      group.name,
+      group.name ?? group.profiles?.[0]?.name ?? group.folder,
       isMain,
     );
     mounts.push(...validatedMounts);
@@ -333,7 +365,7 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(group, input.isMain, input.profileId);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   // Main group uses the default OneCLI agent; others use their own agent.

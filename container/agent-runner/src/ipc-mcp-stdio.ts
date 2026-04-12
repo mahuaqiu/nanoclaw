@@ -503,6 +503,252 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// Profile management tools
+
+server.tool(
+  'add_profile',
+  `Add a new agent profile to a registered group. Main group only.
+
+Each group can have multiple profiles with different triggers (e.g., @Andy, @Tech, @Daily).
+All profiles in a group share the same memory folder.`,
+  {
+    jid: z.string().describe('The chat JID to add the profile to'),
+    profile: z.object({
+      id: z.string().optional().describe('Profile ID (auto-generated if omitted)'),
+      name: z.string().describe('Display name for the profile'),
+      trigger: z.string().describe('Trigger word (e.g., "@Tech")'),
+      description: z.string().optional().describe('Profile description'),
+      isActive: z.boolean().optional().describe('Whether profile is active (default: true)'),
+    }),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only main group can add profiles.' }],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'add_profile',
+      jid: args.jid,
+      profile: args.profile,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    // Wait briefly for IPC to process
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Read result from profiles_list.json
+    const resultFile = path.join(IPC_DIR, 'input', 'profiles_list.json');
+    if (fs.existsSync(resultFile)) {
+      const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+      fs.unlinkSync(resultFile);
+      const addedProfile = result.profiles?.find((p: any) => p.trigger === args.profile.trigger);
+      if (addedProfile) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Profile "${args.profile.name}" added with trigger "${args.profile.trigger}". Profile ID: ${addedProfile.id}`,
+          }],
+        };
+      }
+    }
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Profile "${args.profile.name}" request submitted. Check profiles with list_profiles.`,
+      }],
+    };
+  },
+);
+
+server.tool(
+  'update_profile',
+  `Update an existing profile in a registered group.
+
+Can update name, trigger, description, and active status.`,
+  {
+    jid: z.string().describe('The chat JID'),
+    profileId: z.string().describe('Profile ID to update'),
+    updates: z.object({
+      name: z.string().optional(),
+      trigger: z.string().optional(),
+      description: z.string().optional(),
+      isActive: z.boolean().optional(),
+    }).describe('Fields to update'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only main group can update profiles.' }],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'update_profile',
+      jid: args.jid,
+      profileId: args.profileId,
+      updates: args.updates,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Profile "${args.profileId}" update submitted.`,
+      }],
+    };
+  },
+);
+
+server.tool(
+  'remove_profile',
+  `Remove a profile from a registered group. Main group only.
+
+Cannot remove the last profile in a group.`,
+  {
+    jid: z.string().describe('The chat JID'),
+    profileId: z.string().describe('Profile ID to remove'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only main group can remove profiles.' }],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'remove_profile',
+      jid: args.jid,
+      profileId: args.profileId,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Profile "${args.profileId}" removal submitted.`,
+      }],
+    };
+  },
+);
+
+server.tool(
+  'list_profiles',
+  `List all profiles for a registered group.
+
+Shows profile ID, name, trigger, and status.`,
+  {
+    jid: z.string().optional().describe('JID to query (defaults to current group)'),
+  },
+  async (args) => {
+    const targetJid = args.jid || chatJid;
+
+    const data = {
+      type: 'list_profiles',
+      jid: targetJid,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    // Wait briefly for IPC to process
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Read result
+    const resultFile = path.join(IPC_DIR, 'input', 'profiles_list.json');
+    if (fs.existsSync(resultFile)) {
+      const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+      fs.unlinkSync(resultFile);
+
+      if (result.profiles && result.profiles.length > 0) {
+        const lines = result.profiles.map((p: any) =>
+          `- **${p.id}**: "${p.name}" (trigger: ${p.trigger}, active: ${p.isActive !== false})`
+        );
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Profiles for ${result.jid}:\n${lines.join('\n')}`,
+          }],
+        };
+      } else {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `No profiles found for ${result.jid}.`,
+          }],
+        };
+      }
+    }
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: 'Profile list request submitted. Try again in a moment.',
+      }],
+    };
+  },
+);
+
+server.tool(
+  'get_profile',
+  `Get details of a specific profile in a registered group.`,
+  {
+    jid: z.string().optional().describe('JID (defaults to current group)'),
+    profileId: z.string().describe('Profile ID'),
+  },
+  async (args) => {
+    const targetJid = args.jid || chatJid;
+
+    const data = {
+      type: 'get_profile',
+      jid: targetJid,
+      profileId: args.profileId,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    // Wait briefly for IPC to process
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Read result
+    const resultFile = path.join(IPC_DIR, 'input', 'profile_detail.json');
+    if (fs.existsSync(resultFile)) {
+      const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+      fs.unlinkSync(resultFile);
+
+      if (result.profile) {
+        const p = result.profile;
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Profile **${p.id}**:\n- Name: ${p.name}\n- Trigger: ${p.trigger}\n- Description: ${p.description || 'none'}\n- Active: ${p.isActive !== false}\n- Added: ${p.addedAt}`,
+          }],
+        };
+      }
+    }
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Profile "${args.profileId}" not found.`,
+      }],
+      isError: true,
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

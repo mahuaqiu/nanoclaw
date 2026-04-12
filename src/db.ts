@@ -6,6 +6,7 @@ import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  AgentProfile,
   NewMessage,
   RegisteredGroup,
   ScheduledTask,
@@ -82,6 +83,22 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+
+    -- Agent profiles: 支持一个群有多个角色
+    CREATE TABLE IF NOT EXISTS agent_profiles (
+      id TEXT NOT NULL,
+      jid TEXT NOT NULL,
+      name TEXT NOT NULL,
+      trigger TEXT NOT NULL,
+      description TEXT,
+      container_config TEXT,
+      is_active INTEGER DEFAULT 1,
+      added_at TEXT NOT NULL,
+      PRIMARY KEY (id, jid),
+      FOREIGN KEY (jid) REFERENCES registered_groups(jid) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_profiles_jid ON agent_profiles(jid);
+    CREATE INDEX IF NOT EXISTS idx_profiles_trigger ON agent_profiles(trigger);
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -125,6 +142,19 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+
+  // Add default_profile column if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN default_profile TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // Migrate existing registered_groups to profiles format
+  // For each existing group, create a default profile with its trigger
+  migrateLegacyGroupsToProfiles(database);
 
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
@@ -596,7 +626,7 @@ export function getAllSessions(): Record<string, string> {
 
 export function getRegisteredGroup(
   jid: string,
-): (RegisteredGroup & { jid: string }) | undefined {
+): RegisteredGroup | undefined {
   const row = db
     .prepare('SELECT * FROM registered_groups WHERE jid = ?')
     .get(jid) as
@@ -609,6 +639,7 @@ export function getRegisteredGroup(
         container_config: string | null;
         requires_trigger: number | null;
         is_main: number | null;
+        default_profile: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -619,18 +650,46 @@ export function getRegisteredGroup(
     );
     return undefined;
   }
+
+  // Get profiles for this group
+  const profiles = getProfiles(jid);
+
+  // If no profiles exist yet (edge case), create a default from legacy fields
+  if (profiles.length === 0 && row.trigger_pattern) {
+    const defaultProfileId = row.folder
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '_')
+      .replace(/_+/g, '_')
+      .slice(0, 32);
+    const defaultProfile: AgentProfile = {
+      id: defaultProfileId,
+      name: row.name,
+      trigger: row.trigger_pattern,
+      containerConfig: row.container_config
+        ? JSON.parse(row.container_config)
+        : undefined,
+      isActive: true,
+      addedAt: row.added_at,
+    };
+    profiles.push(defaultProfile);
+  }
+
   return {
     jid: row.jid,
-    name: row.name,
     folder: row.folder,
+    profiles,
+    defaultProfile: row.default_profile ?? profiles[0]?.id,
+    requiresTrigger:
+      row.requires_trigger === null ? undefined : row.requires_trigger === 1,
+    isMain: row.is_main === 1 ? true : undefined,
+    addedAt: row.added_at,
+    // Legacy fields for backward compatibility
+    name: row.name,
     trigger: row.trigger_pattern,
     added_at: row.added_at,
     containerConfig: row.container_config
       ? JSON.parse(row.container_config)
       : undefined,
-    requiresTrigger:
-      row.requires_trigger === null ? undefined : row.requires_trigger === 1,
-    isMain: row.is_main === 1 ? true : undefined,
   };
 }
 
@@ -638,19 +697,40 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
   if (!isValidGroupFolder(group.folder)) {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
+
+  // 支持新旧两种格式
+  // 新格式: profiles 数组，取第一个 profile 的 name/trigger
+  // 旧格式: 直接的 name/trigger 字段
+  const firstProfile = group.profiles?.[0];
+  const name = firstProfile?.name ?? group.name ?? 'Unknown';
+  const trigger = firstProfile?.trigger ?? group.trigger ?? '';
+  const addedAt = group.addedAt ?? group.added_at ?? new Date().toISOString();
+  const containerConfig = firstProfile?.containerConfig ?? group.containerConfig;
+
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, default_profile)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
-    group.name,
+    name,
     group.folder,
-    group.trigger,
-    group.added_at,
-    group.containerConfig ? JSON.stringify(group.containerConfig) : null,
+    trigger,
+    addedAt,
+    containerConfig ? JSON.stringify(containerConfig) : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
+    group.defaultProfile ?? firstProfile?.id ?? null,
   );
+
+  // 如果有 profiles 数组，同步写入 agent_profiles 表
+  if (group.profiles && group.profiles.length > 0) {
+    // 先删除旧的 profiles
+    db.prepare('DELETE FROM agent_profiles WHERE jid = ?').run(jid);
+    // 写入新的 profiles
+    for (const profile of group.profiles) {
+      addProfile(jid, profile);
+    }
+  }
 }
 
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
@@ -663,6 +743,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     container_config: string | null;
     requires_trigger: number | null;
     is_main: number | null;
+    default_profile: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -673,23 +754,281 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       );
       continue;
     }
+
+    // Get profiles for this group
+    const profiles = getProfiles(row.jid);
+
+    // If no profiles exist yet (edge case), create a default from legacy fields
+    if (profiles.length === 0 && row.trigger_pattern) {
+      const defaultProfileId = row.folder
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 32);
+      profiles.push({
+        id: defaultProfileId,
+        name: row.name,
+        trigger: row.trigger_pattern,
+        containerConfig: row.container_config
+          ? JSON.parse(row.container_config)
+          : undefined,
+        isActive: true,
+        addedAt: row.added_at,
+      });
+    }
+
     result[row.jid] = {
-      name: row.name,
+      jid: row.jid,
       folder: row.folder,
+      profiles,
+      defaultProfile: row.default_profile ?? profiles[0]?.id,
+      requiresTrigger:
+        row.requires_trigger === null ? undefined : row.requires_trigger === 1,
+      isMain: row.is_main === 1 ? true : undefined,
+      addedAt: row.added_at,
+      // Legacy fields for backward compatibility
+      name: row.name,
       trigger: row.trigger_pattern,
       added_at: row.added_at,
       containerConfig: row.container_config
         ? JSON.parse(row.container_config)
         : undefined,
-      requiresTrigger:
-        row.requires_trigger === null ? undefined : row.requires_trigger === 1,
-      isMain: row.is_main === 1 ? true : undefined,
     };
   }
   return result;
 }
 
-// --- JSON migration ---
+// --- Agent Profile accessors ---
+
+/**
+ * Get all profiles for a registered group
+ */
+export function getProfiles(jid: string): AgentProfile[] {
+  const rows = db
+    .prepare('SELECT * FROM agent_profiles WHERE jid = ? ORDER BY added_at')
+    .all(jid) as Array<{
+      id: string;
+      jid: string;
+      name: string;
+      trigger: string;
+      description: string | null;
+      container_config: string | null;
+      is_active: number;
+      added_at: string;
+    }>;
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    trigger: row.trigger,
+    description: row.description ?? undefined,
+    containerConfig: row.container_config
+      ? JSON.parse(row.container_config)
+      : undefined,
+    isActive: row.is_active === 1,
+    addedAt: row.added_at,
+  }));
+}
+
+/**
+ * Get a specific profile by ID
+ */
+export function getProfile(jid: string, profileId: string): AgentProfile | undefined {
+  const row = db
+    .prepare('SELECT * FROM agent_profiles WHERE jid = ? AND id = ?')
+    .get(jid, profileId) as
+    | {
+        id: string;
+        jid: string;
+        name: string;
+        trigger: string;
+        description: string | null;
+        container_config: string | null;
+        is_active: number;
+        added_at: string;
+      }
+    | undefined;
+
+  if (!row) return undefined;
+
+  return {
+    id: row.id,
+    name: row.name,
+    trigger: row.trigger,
+    description: row.description ?? undefined,
+    containerConfig: row.container_config
+      ? JSON.parse(row.container_config)
+      : undefined,
+    isActive: row.is_active === 1,
+    addedAt: row.added_at,
+  };
+}
+
+/**
+ * Add a new profile to a registered group
+ */
+export function addProfile(jid: string, profile: AgentProfile): void {
+  db.prepare(
+    `INSERT INTO agent_profiles (id, jid, name, trigger, description, container_config, is_active, added_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    profile.id,
+    jid,
+    profile.name,
+    profile.trigger,
+    profile.description ?? null,
+    profile.containerConfig ? JSON.stringify(profile.containerConfig) : null,
+    profile.isActive === false ? 0 : 1,
+    profile.addedAt,
+  );
+}
+
+/**
+ * Update an existing profile
+ */
+export function updateProfile(
+  jid: string,
+  profileId: string,
+  updates: Partial<
+    Pick<
+      AgentProfile,
+      'name' | 'trigger' | 'description' | 'containerConfig' | 'isActive'
+    >
+  >,
+): void {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.name !== undefined) {
+    fields.push('name = ?');
+    values.push(updates.name);
+  }
+  if (updates.trigger !== undefined) {
+    fields.push('trigger = ?');
+    values.push(updates.trigger);
+  }
+  if (updates.description !== undefined) {
+    fields.push('description = ?');
+    values.push(updates.description ?? null);
+  }
+  if (updates.containerConfig !== undefined) {
+    fields.push('container_config = ?');
+    values.push(
+      updates.containerConfig
+        ? JSON.stringify(updates.containerConfig)
+        : null,
+    );
+  }
+  if (updates.isActive !== undefined) {
+    fields.push('is_active = ?');
+    values.push(updates.isActive ? 1 : 0);
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(jid, profileId);
+  db.prepare(
+    `UPDATE agent_profiles SET ${fields.join(', ')} WHERE jid = ? AND id = ?`,
+  ).run(...values);
+}
+
+/**
+ * Remove a profile from a registered group
+ */
+export function removeProfile(jid: string, profileId: string): void {
+  db.prepare('DELETE FROM agent_profiles WHERE jid = ? AND id = ?').run(
+    jid,
+    profileId,
+  );
+}
+
+/**
+ * Check if a trigger already exists for a group (excluding a specific profile)
+ */
+export function triggerExists(
+  jid: string,
+  trigger: string,
+  excludeProfileId?: string,
+): boolean {
+  const row = db
+    .prepare(
+      'SELECT 1 FROM agent_profiles WHERE jid = ? AND trigger = ? AND id != ?',
+    )
+    .get(jid, trigger, excludeProfileId ?? '') as { 1: number } | undefined;
+  return !!row;
+}
+
+// --- Profile migration helper ---
+
+/**
+ * Migrate legacy registered_groups (single trigger) to profiles format
+ */
+function migrateLegacyGroupsToProfiles(database: Database.Database): void {
+  // Check if agent_profiles table exists and has data
+  const existingProfiles = database
+    .prepare('SELECT COUNT(*) as count FROM agent_profiles')
+    .get() as { count: number };
+
+  if (existingProfiles.count > 0) {
+    // Already migrated
+    return;
+  }
+
+  // Get all existing registered_groups
+  const groups = database.prepare('SELECT * FROM registered_groups').all() as Array<{
+    jid: string;
+    name: string;
+    folder: string;
+    trigger_pattern: string;
+    added_at: string;
+    container_config: string | null;
+    requires_trigger: number;
+    is_main: number;
+  }>;
+
+  for (const group of groups) {
+    // Create a default profile from the legacy group config
+    const profileId = group.folder
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '_')
+      .replace(/_+/g, '_')
+      .slice(0, 32);
+
+    // Skip if profile already exists (edge case)
+    const existing = database
+      .prepare('SELECT 1 FROM agent_profiles WHERE jid = ? AND id = ?')
+      .get(group.jid, profileId);
+    if (existing) continue;
+
+    database
+      .prepare(
+        `INSERT INTO agent_profiles (id, jid, name, trigger, description, container_config, is_active, added_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        profileId,
+        group.jid,
+        group.name,
+        group.trigger_pattern,
+        null,
+        group.container_config,
+        1,
+        group.added_at,
+      );
+
+    // Set default_profile to this profile
+    database
+      .prepare(
+        'UPDATE registered_groups SET default_profile = ? WHERE jid = ?',
+      )
+      .run(profileId, group.jid);
+
+    logger.info(
+      { jid: group.jid, profileId, trigger: group.trigger_pattern },
+      'Migrated legacy group to profiles format',
+    );
+  }
+}
 
 function migrateJsonState(): void {
   const migrateFile = (filename: string) => {

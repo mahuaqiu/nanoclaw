@@ -20,7 +20,8 @@ import http from 'http';
 import https from 'https';
 import url from 'url';
 import { registerChannel, ChannelOpts } from './registry.js';
-import { Channel, NewMessage, RegisteredGroup } from '../types.js';
+import { Channel, NewMessage, RegisteredGroup, AgentProfile } from '../types.js';
+import { addProfile, getProfiles, getProfile, updateProfile, removeProfile, triggerExists } from '../db.js';
 import { logger } from '../logger.js';
 
 // Outbound message queue (in-memory, for polling mode)
@@ -218,6 +219,16 @@ class HttpApiChannel implements Channel {
       this.handleClearSession(req, res);
     } else if (pathname?.startsWith('/api/session/') && method === 'GET') {
       this.handleGetSession(pathname, res);
+    } else if (pathname?.startsWith('/api/profiles/') && method === 'GET') {
+      this.handleProfiles(pathname, req, res);
+    } else if (pathname?.startsWith('/api/profiles/') && method === 'POST') {
+      this.handleAddProfile(pathname, req, res);
+    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) && method === 'GET') {
+      this.handleGetProfile(pathname, res);
+    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) && method === 'PUT') {
+      this.handleUpdateProfile(pathname, req, res);
+    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) && method === 'DELETE') {
+      this.handleRemoveProfile(pathname, res);
     } else {
       res.writeHead(404);
       res.end(JSON.stringify({ error: 'Not found' }));
@@ -466,6 +477,223 @@ class HttpApiChannel implements Channel {
       session_id: sessionId || null,
       has_session: sessionId !== undefined,
       callback_url: callbackUrl || null,
+    }));
+  }
+
+  // --- Profile management handlers ---
+
+  private handleProfiles(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): void {
+    // Extract jid from pathname - could be /api/profiles/{jid} or /api/profiles/{jid}/{profileId}
+    const parts = pathname.replace('/api/profiles/', '').split('/');
+    const jid = parts[0];
+
+    // If there's a second part, it's a profileId - redirect to handleGetProfile
+    if (parts.length > 1) {
+      this.handleGetProfile(pathname, res);
+      return;
+    }
+
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+
+    if (!group) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Chat not registered', jid }));
+      return;
+    }
+
+    const profiles = getProfiles(jid);
+
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      jid,
+      profiles,
+      count: profiles.length,
+    }));
+  }
+
+  private handleGetProfile(pathname: string, res: http.ServerResponse): void {
+    const parts = pathname.replace('/api/profiles/', '').split('/');
+    const jid = parts[0];
+    const profileId = parts[1];
+
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+
+    if (!group) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Chat not registered', jid }));
+      return;
+    }
+
+    const profile = getProfile(jid, profileId);
+
+    if (!profile) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Profile not found', jid, profileId }));
+      return;
+    }
+
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      jid,
+      profile,
+    }));
+  }
+
+  private async handleAddProfile(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    try {
+      const jid = pathname.replace('/api/profiles/', '').split('/')[0];
+
+      const groups = this.opts.registeredGroups();
+      const group = groups[jid];
+
+      if (!group) {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'Chat not registered', jid }));
+        return;
+      }
+
+      const body = await this.readBody(req);
+      const data = JSON.parse(body);
+
+      if (!data.name || !data.trigger) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Missing required fields: name, trigger' }));
+        return;
+      }
+
+      // Check if trigger already exists
+      const profileId = data.id || `profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      if (triggerExists(jid, data.trigger, profileId)) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Trigger already exists for another profile', trigger: data.trigger }));
+        return;
+      }
+
+      const profile: AgentProfile = {
+        id: profileId,
+        name: data.name,
+        trigger: data.trigger,
+        description: data.description,
+        containerConfig: data.containerConfig,
+        isActive: data.isActive !== false,
+        addedAt: new Date().toISOString(),
+      };
+
+      addProfile(jid, profile);
+
+      logger.info({ channel: this.name, jid, profileId: profile.id, trigger: profile.trigger }, 'Profile added');
+
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        status: 'ok',
+        jid,
+        profile,
+      }));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ channel: this.name, error: errorMessage }, 'Failed to add profile');
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: errorMessage }));
+    }
+  }
+
+  private async handleUpdateProfile(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    try {
+      const parts = pathname.replace('/api/profiles/', '').split('/');
+      const jid = parts[0];
+      const profileId = parts[1];
+
+      const groups = this.opts.registeredGroups();
+      const group = groups[jid];
+
+      if (!group) {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'Chat not registered', jid }));
+        return;
+      }
+
+      const existingProfile = getProfile(jid, profileId);
+      if (!existingProfile) {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'Profile not found', jid, profileId }));
+        return;
+      }
+
+      const body = await this.readBody(req);
+      const data = JSON.parse(body);
+
+      // Check trigger conflict if updating trigger
+      if (data.trigger && triggerExists(jid, data.trigger, profileId)) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Trigger already exists for another profile', trigger: data.trigger }));
+        return;
+      }
+
+      const updates: Partial<AgentProfile> = {};
+      if (data.name !== undefined) updates.name = data.name;
+      if (data.trigger !== undefined) updates.trigger = data.trigger;
+      if (data.description !== undefined) updates.description = data.description;
+      if (data.isActive !== undefined) updates.isActive = data.isActive;
+
+      updateProfile(jid, profileId, updates);
+
+      logger.info({ channel: this.name, jid, profileId, updates }, 'Profile updated');
+
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        status: 'ok',
+        jid,
+        profileId,
+        updates,
+      }));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ channel: this.name, error: errorMessage }, 'Failed to update profile');
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: errorMessage }));
+    }
+  }
+
+  private handleRemoveProfile(pathname: string, res: http.ServerResponse): void {
+    const parts = pathname.replace('/api/profiles/', '').split('/');
+    const jid = parts[0];
+    const profileId = parts[1];
+
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+
+    if (!group) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Chat not registered', jid }));
+      return;
+    }
+
+    // Check if this is the last profile
+    const profiles = getProfiles(jid);
+    if (profiles.length <= 1) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: 'Cannot remove last profile', jid }));
+      return;
+    }
+
+    const existingProfile = getProfile(jid, profileId);
+    if (!existingProfile) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Profile not found', jid, profileId }));
+      return;
+    }
+
+    removeProfile(jid, profileId);
+
+    logger.info({ channel: this.name, jid, profileId }, 'Profile removed');
+
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      status: 'ok',
+      jid,
+      profileId,
     }));
   }
 

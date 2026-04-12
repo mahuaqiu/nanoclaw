@@ -32,14 +32,37 @@ export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
+/**
+ * Agent Profile - 一个群可以有多个角色配置
+ * 每个 Profile 有独立的 trigger，可选的专属 CLAUDE.md
+ */
+export interface AgentProfile {
+  id: string; // Profile ID (e.g., "andy", "tech", "daily")
+  name: string; // 显示名称
+  trigger: string; // 触发词 (e.g., "@Andy", "@Tech")
+  description?: string; // 角色描述
+  containerConfig?: ContainerConfig; // 可选的独立容器配置
+  isActive?: boolean; // 是否激活 (默认 true)
+  addedAt: string; // 添加时间
+}
+
+/**
+ * Registered Group - 注册的群组配置
+ * 现在支持多个 profiles (角色)，共享同一 folder (记忆)
+ */
 export interface RegisteredGroup {
-  name: string;
-  folder: string;
-  trigger: string;
-  added_at: string;
-  containerConfig?: ContainerConfig;
-  requiresTrigger?: boolean; // Default: true for groups, false for solo chats
-  isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  jid?: string; // 群 JID (主键) - 可选用于向后兼容
+  folder: string; // 共享的群文件夹 (所有角色共享记忆)
+  profiles?: AgentProfile[]; // 角色列表 - 可选用于向后兼容
+  defaultProfile?: string; // 默认角色 ID (无触发词时使用)
+  requiresTrigger?: boolean; // 群级触发要求 (默认 true)
+  isMain?: boolean; // 是否是主群
+  addedAt?: string; // 注册时间 - 新格式
+  // 向后兼容：旧格式字段 (迁移后保留用于兼容层)
+  name?: string; // @deprecated 使用 profiles[0].name
+  trigger?: string; // @deprecated 使用 profiles[0].trigger
+  added_at?: string; // @deprecated 使用 addedAt
+  containerConfig?: ContainerConfig; // @deprecated 使用 profiles[0].containerConfig
 }
 
 export interface NewMessage {

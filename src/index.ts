@@ -63,7 +63,7 @@ import {
 } from './sender-allowlist.js';
 import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { Channel, NewMessage, RegisteredGroup } from './types.js';
+import { AgentProfile, Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
@@ -83,7 +83,8 @@ const onecli = new OneCLI({ url: ONECLI_URL });
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
   if (group.isMain) return;
   const identifier = group.folder.toLowerCase().replace(/_/g, '-');
-  onecli.ensureAgent({ name: group.name, identifier }).then(
+  const agentName = group.name ?? group.profiles?.[0]?.name ?? group.folder;
+  onecli.ensureAgent({ name: agentName, identifier }).then(
     (res) => {
       logger.info(
         { jid, identifier, created: res.created },
@@ -97,6 +98,58 @@ function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
       );
     },
   );
+}
+
+/**
+ * 查找匹配的 profile
+ * 遍历 profiles 数组，找到第一个 trigger 匹配的 profile
+ */
+function findMatchingProfile(
+  group: RegisteredGroup,
+  messages: NewMessage[],
+  chatJid: string,
+): AgentProfile | undefined {
+  const allowlistCfg = loadSenderAllowlist();
+
+  // 如果没有 profiles，使用旧格式的 trigger
+  if (!group.profiles || group.profiles.length === 0) {
+    if (!group.trigger) return undefined;
+    const triggerPattern = getTriggerPattern(group.trigger);
+    const matchedMsg = messages.find(
+      (m) =>
+        triggerPattern.test(m.content.trim()) &&
+        (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
+    );
+    if (matchedMsg) {
+      // 返回一个虚拟的 default profile
+      return {
+        id: 'default',
+        name: group.name ?? 'Assistant',
+        trigger: group.trigger,
+        isActive: true,
+        addedAt: group.addedAt ?? group.added_at ?? new Date().toISOString(),
+      };
+    }
+    return undefined;
+  }
+
+  // 遍历所有 profiles 查找匹配的 trigger
+  for (const profile of group.profiles) {
+    if (profile.isActive === false) continue;
+
+    const triggerPattern = getTriggerPattern(profile.trigger);
+    const matchedMsg = messages.find(
+      (m) =>
+        triggerPattern.test(m.content.trim()) &&
+        (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
+    );
+
+    if (matchedMsg) {
+      return profile;
+    }
+  }
+
+  return undefined;
 }
 
 function loadState(): void {
@@ -239,16 +292,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
-  // For non-main groups, check if trigger is required and present
+  // For non-main groups, check if trigger is required and find matching profile
+  let matchedProfile: AgentProfile | undefined;
   if (!isMainGroup && group.requiresTrigger !== false) {
-    const triggerPattern = getTriggerPattern(group.trigger);
-    const allowlistCfg = loadSenderAllowlist();
-    const hasTrigger = missedMessages.some(
-      (m) =>
-        triggerPattern.test(m.content.trim()) &&
-        (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
-    );
-    if (!hasTrigger) return true;
+    matchedProfile = findMatchingProfile(group, missedMessages, chatJid);
+    if (!matchedProfile) return true; // No trigger matched, skip
+  } else if (isMainGroup) {
+    // Main group: use first profile or default
+    matchedProfile = group.profiles?.[0] ?? {
+      id: 'default',
+      name: ASSISTANT_NAME,
+      trigger: DEFAULT_TRIGGER,
+      isActive: true,
+      addedAt: group.addedAt ?? group.added_at ?? new Date().toISOString(),
+    };
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
@@ -260,8 +317,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     missedMessages[missedMessages.length - 1].timestamp;
   saveState();
 
+  const groupName = matchedProfile?.name ?? group.name ?? group.folder;
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    { group: groupName, profile: matchedProfile?.id, messageCount: missedMessages.length },
     'Processing messages',
   );
 
@@ -283,7 +341,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
+  const output = await runAgent(group, matchedProfile, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =
@@ -292,7 +350,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+      const groupName = matchedProfile?.name ?? group.name ?? group.folder;
+      logger.info({ group: groupName }, `Agent output: ${raw.length} chars`);
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
@@ -338,6 +397,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
 async function runAgent(
   group: RegisteredGroup,
+  profile: AgentProfile | undefined,
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
@@ -382,6 +442,10 @@ async function runAgent(
       }
     : undefined;
 
+  // Get profile name for agent
+  const profileName = profile?.name ?? group.name ?? ASSISTANT_NAME;
+  const profileId = profile?.id ?? 'default';
+
   try {
     const output = await runContainerAgent(
       group,
@@ -391,7 +455,8 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
-        assistantName: ASSISTANT_NAME,
+        assistantName: profileName,
+        profileId,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -491,15 +556,8 @@ async function startMessageLoop(): Promise<void> {
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
-            const triggerPattern = getTriggerPattern(group.trigger);
-            const allowlistCfg = loadSenderAllowlist();
-            const hasTrigger = groupMessages.some(
-              (m) =>
-                triggerPattern.test(m.content.trim()) &&
-                (m.is_from_me ||
-                  isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
-            );
-            if (!hasTrigger) continue;
+            const matchedProfile = findMatchingProfile(group, groupMessages, chatJid);
+            if (!matchedProfile) continue;
           }
 
           // Pull all messages since lastAgentTimestamp so non-trigger
