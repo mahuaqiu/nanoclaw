@@ -1,79 +1,75 @@
 @echo off
-REM NanoClaw Docker 部署脚本 (Windows)
-REM 一键构建并启动 NanoClaw
+chcp 65001 >nul 2>&1
+REM NanoClaw Docker Deploy Script for Windows
 
-setlocal enabledelayedexpansion
+echo === NanoClaw Docker Deploy ===
 
-echo === NanoClaw Docker 部署 ===
-
-REM 检查 Docker 是否可用
+REM Check Docker
 where docker >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo 错误：Docker 未安装或不可用
-    echo 请先安装 Docker Desktop: https://www.docker.com/products/docker-desktop
+if errorlevel 1 (
+    echo ERROR: Docker not installed
+    echo Please install Docker Desktop: https://www.docker.com/products/docker-desktop
     exit /b 1
 )
 
-REM 检查 Docker 是否运行
+REM Check Docker running
 docker info >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo 错误：Docker 未运行，请先启动 Docker Desktop
+if errorlevel 1 (
+    echo ERROR: Docker not running
+    echo Please start Docker Desktop first
     exit /b 1
 )
 
-REM 切换到脚本所在目录
+REM Change to script directory
 cd /d "%~dp0"
 
-REM 步骤 1：构建 Agent 容器镜像
+REM Step 1: Build Agent container
 echo.
-echo [1/3] 构建 Agent 容器镜像...
+echo [1/3] Building Agent container...
 cd container
 docker build -t nanoclaw-agent:latest .
-if %ERRORLEVEL% neq 0 (
-    echo 错误：Agent 容器镜像构建失败
+if errorlevel 1 (
+    echo ERROR: Agent container build failed
     cd ..
     exit /b 1
 )
 cd ..
 
-REM 步骤 2：构建 NanoClaw 主镜像
+REM Step 2: Build NanoClaw main container
 echo.
-echo [2/3] 构建 NanoClaw 主镜像...
+echo [2/3] Building NanoClaw main container...
 docker build -t nanoclaw:latest .
-if %ERRORLEVEL% neq 0 (
-    echo 错误：NanoClaw 主镜像构建失败
+if errorlevel 1 (
+    echo ERROR: NanoClaw main container build failed
     exit /b 1
 )
 
-REM 步骤 3：启动服务
+REM Step 3: Start service
 echo.
-echo [3/3] 启动 NanoClaw 服务...
+echo [3/3] Starting NanoClaw service...
 
-REM 检查是否存在 .env.docker 文件
 if exist ".env.docker" (
-    echo 使用 .env.docker 配置文件
+    echo Using .env.docker config file
     docker compose --env-file .env.docker up -d
 ) else (
-    echo 使用默认配置（建议创建 .env.docker 文件自定义配置）
+    echo Using default config (create .env.docker to customize)
     docker compose up -d
 )
 
-if %ERRORLEVEL% neq 0 (
-    echo 错误：服务启动失败
+if errorlevel 1 (
+    echo ERROR: Service start failed
     exit /b 1
 )
 
 echo.
-echo === 部署完成 ===
+echo === Deploy Complete ===
 echo.
-echo 查看日志：
+echo View logs:
 echo   docker compose logs -f nanoclaw
 echo.
-echo 停止服务：
+echo Stop service:
 echo   docker compose down
 echo.
-echo 重启服务：
+echo Restart service:
 echo   docker compose restart
 echo.
-
-endlocal
