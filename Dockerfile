@@ -1,7 +1,7 @@
 # NanoClaw 主应用 Docker 镜像
 # 用于运行 NanoClaw 服务，通过 Docker socket 启动 agent 容器
 
-FROM node:20-alpine
+FROM node:22-slim
 
 # 安装构建工具（用于编译 better-sqlite3 原生模块）
 # 安装 Docker CLI（用于在容器内构建和运行 agent 容器）

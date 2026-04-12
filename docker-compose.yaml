@@ -17,6 +17,10 @@ services:
       - nanoclaw-groups:/app/groups
       - nanoclaw-data:/app/data
       - nanoclaw-logs:/app/logs
+
+    # 暴露 HTTP API 端口（用于自建 REST 接口）
+    ports:
+      - "${HTTP_API_PORT:-8080}:8080"
       # 配置文件（如果需要自定义配置，取消下面的注释）
       # - ./env:/app/.env:ro
       # WhatsApp 认证文件（如果使用 WhatsApp，取消下面的注释）
@@ -68,6 +72,11 @@ services:
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-20250514}
 
       # ===== 频道配置 =====
+      # HTTP API 频道（自建 REST 接口）
+      - HTTP_API_ENABLED=${HTTP_API_ENABLED:-true}
+      - HTTP_API_PORT=${HTTP_API_PORT:-8080}
+      - HTTP_API_TOKEN=${HTTP_API_TOKEN:-}
+
       # Telegram Bot Token（从 @BotFather 获取）
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
 

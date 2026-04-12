@@ -442,7 +442,7 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      model: model,
+      model: process.env.CLAUDE_MODEL,
       systemPrompt: globalClaudeMd
         ? {
             type: 'preset' as const,
@@ -624,7 +624,6 @@ async function main(): Promise<void> {
 
   // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
   // No real secrets exist in the container environment.
-  // Model can be configured via CLAUDE_MODEL env var (supports custom models like glm-5).
   const sdkEnv: Record<string, string | undefined> = {
     ...process.env,
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',

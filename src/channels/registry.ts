@@ -9,6 +9,10 @@ export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  registerGroup: (jid: string, group: RegisteredGroup) => void;
+  // Session management callbacks (for HTTP API channel)
+  deleteSession?: (groupFolder: string) => void;
+  getSession?: (groupFolder: string) => string | undefined;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

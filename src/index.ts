@@ -672,6 +672,18 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    registerGroup: (jid: string, group: RegisteredGroup) => {
+      setRegisteredGroup(jid, group);
+      registeredGroups = getAllRegisteredGroups();
+      logger.info({ jid, folder: group.folder, isMain: group.isMain }, 'Group registered via channel API');
+    },
+    // Session management for HTTP API channel
+    deleteSession: (groupFolder: string) => {
+      delete sessions[groupFolder];
+      deleteSession(groupFolder);
+      logger.info({ groupFolder }, 'Session cleared via API');
+    },
+    getSession: (groupFolder: string) => sessions[groupFolder],
   };
 
   // Create and connect all registered channels.
