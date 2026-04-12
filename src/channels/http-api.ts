@@ -5,8 +5,10 @@
  * Endpoints:
  *   POST /api/message     - Receive message from external system (supports callback_url)
  *   GET  /api/outbox/:jid - Get pending outbound messages for a chat (polling mode)
- *   POST /api/register    - Register a new chat group
+ *   POST /api/register    - Register a new chat group (supports profiles array for multi-role)
  *   GET  /api/groups      - List registered groups
+ *   GET  /api/groups/:jid - Get group details
+ *   PUT  /api/groups/:jid - Update group (supports profiles array for multi-role)
  *   GET  /api/health      - Health check
  *   POST /api/clear       - Clear session (reset context)
  *   GET  /api/session/:id - Get session info
@@ -14,13 +16,17 @@
  * Two modes:
  *   - Polling: caller fetches replies via GET /api/outbox/:jid
  *   - Callback: caller provides callback_url in POST /api/message, NanoClaw pushes replies
+ *
+ * Register endpoint supports two formats:
+ *   1. Legacy: { chat_id, name, folder, trigger } - single role
+ *   2. New: { chat_id, folder, profiles: [{ name, trigger, ... }] } - multiple roles
  */
 
 import http from 'http';
 import https from 'https';
 import url from 'url';
 import { registerChannel, ChannelOpts } from './registry.js';
-import { Channel, NewMessage, RegisteredGroup, AgentProfile } from '../types.js';
+import { Channel, NewMessage, RegisteredGroup, AgentProfile, ContainerConfig } from '../types.js';
 import {
   addProfile,
   getProfiles,
@@ -32,6 +38,7 @@ import {
   isSkillAssigned,
   assignSkill,
   removeSkillAssignment,
+  setRegisteredGroup,
 } from '../db.js';
 import {
   listGlobalSkills,
@@ -234,6 +241,10 @@ class HttpApiChannel implements Channel {
       this.handleRegister(req, res);
     } else if (pathname === '/api/groups' && method === 'GET') {
       this.handleListGroups(res);
+    } else if (pathname?.match(/^\/api\/groups\/[^/]+$/) && method === 'PUT') {
+      this.handleUpdateGroup(pathname, req, res);
+    } else if (pathname?.match(/^\/api\/groups\/[^/]+$/) && method === 'GET') {
+      this.handleGetGroup(pathname, res);
     } else if (pathname === '/api/clear' && method === 'POST') {
       this.handleClearSession(req, res);
     } else if (pathname?.startsWith('/api/session/') && method === 'GET') {
@@ -374,21 +385,80 @@ class HttpApiChannel implements Channel {
       const data = JSON.parse(body);
 
       // Required fields
-      if (!data.chat_id || !data.name || !data.folder || !data.trigger) {
+      if (!data.chat_id || !data.folder) {
         res.writeHead(400);
         res.end(JSON.stringify({
-          error: 'Missing required fields: chat_id, name, folder, trigger'
+          error: 'Missing required fields: chat_id, folder'
         }));
         return;
       }
 
       const chatJid = `http:${data.chat_id}`;
 
+      // 支持两种格式：profiles 数组 或 旧格式 (name + trigger)
+      let profiles: AgentProfile[] | undefined;
+      let legacyName: string | undefined;
+      let legacyTrigger: string | undefined;
+
+      if (data.profiles && Array.isArray(data.profiles) && data.profiles.length > 0) {
+        // 新格式：profiles 数组
+        for (const p of data.profiles) {
+          if (!p.name || !p.trigger) {
+            res.writeHead(400);
+            res.end(JSON.stringify({
+              error: 'Each profile must have name and trigger fields'
+            }));
+            return;
+          }
+        }
+
+        // 检查 trigger 是否重复
+        const triggers = data.profiles.map((p: { trigger: string }) => p.trigger);
+        const uniqueTriggers = new Set(triggers);
+        if (uniqueTriggers.size !== triggers.length) {
+          res.writeHead(400);
+          res.end(JSON.stringify({
+            error: 'Duplicate triggers in profiles',
+            triggers
+          }));
+          return;
+        }
+
+        profiles = data.profiles.map((p: {
+          id?: string;
+          name: string;
+          trigger: string;
+          description?: string;
+          containerConfig?: ContainerConfig;
+          isActive?: boolean;
+        }, index: number) => ({
+          id: p.id || `profile-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+          name: p.name,
+          trigger: p.trigger,
+          description: p.description,
+          containerConfig: p.containerConfig,
+          isActive: p.isActive !== false,
+          addedAt: new Date().toISOString(),
+        }));
+      } else if (data.name && data.trigger) {
+        // 旧格式：单一 name + trigger
+        legacyName = data.name;
+        legacyTrigger = data.trigger;
+      } else {
+        res.writeHead(400);
+        res.end(JSON.stringify({
+          error: 'Must provide either profiles array or name+trigger fields'
+        }));
+        return;
+      }
+
       // Build RegisteredGroup
       const group: RegisteredGroup = {
-        name: data.name,
+        name: legacyName,
         folder: data.folder,
-        trigger: data.trigger,
+        trigger: legacyTrigger,
+        profiles,
+        defaultProfile: data.default_profile,
         added_at: new Date().toISOString(),
         requiresTrigger: data.requires_trigger !== false, // default true
         isMain: data.is_main === true, // default false
@@ -399,13 +469,17 @@ class HttpApiChannel implements Channel {
       this.opts.registerGroup(chatJid, group);
 
       // Also store chat metadata
+      const groupName = legacyName || profiles?.[0]?.name || data.folder;
       this.opts.onChatMetadata(
         chatJid,
         new Date().toISOString(),
-        data.name,
+        groupName,
         this.name,
         data.is_group || false,
       );
+
+      // 获取最终写入的 profiles
+      const finalProfiles = getProfiles(chatJid);
 
       res.writeHead(200);
       res.end(JSON.stringify({
@@ -414,6 +488,8 @@ class HttpApiChannel implements Channel {
         folder: group.folder,
         is_main: group.isMain,
         requires_trigger: group.requiresTrigger,
+        profiles: finalProfiles,
+        profiles_count: finalProfiles.length,
       }));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -430,6 +506,138 @@ class HttpApiChannel implements Channel {
 
     res.writeHead(200);
     res.end(JSON.stringify({ groups: httpGroups, count: httpGroups.length }));
+  }
+
+  private handleGetGroup(pathname: string, res: http.ServerResponse): void {
+    const jid = pathname.replace('/api/groups/', '');
+
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+
+    if (!group) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Group not found', jid }));
+      return;
+    }
+
+    const profiles = getProfiles(jid);
+
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      jid,
+      folder: group.folder,
+      is_main: group.isMain,
+      requires_trigger: group.requiresTrigger,
+      profiles,
+      profiles_count: profiles.length,
+    }));
+  }
+
+  private async handleUpdateGroup(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    try {
+      const jid = pathname.replace('/api/groups/', '');
+
+      const groups = this.opts.registeredGroups();
+      const existingGroup = groups[jid];
+
+      if (!existingGroup) {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'Group not found', jid }));
+        return;
+      }
+
+      const body = await this.readBody(req);
+      const data = JSON.parse(body);
+
+      // 支持两种格式：profiles 数组 或 旧格式 (name + trigger)
+      let profiles: AgentProfile[] | undefined;
+      let legacyName: string | undefined;
+      let legacyTrigger: string | undefined;
+
+      if (data.profiles && Array.isArray(data.profiles) && data.profiles.length > 0) {
+        // 新格式：profiles 数组
+        for (const p of data.profiles) {
+          if (!p.name || !p.trigger) {
+            res.writeHead(400);
+            res.end(JSON.stringify({
+              error: 'Each profile must have name and trigger fields'
+            }));
+            return;
+          }
+        }
+
+        // 检查 trigger 是否重复
+        const triggers = data.profiles.map((p: { trigger: string }) => p.trigger);
+        const uniqueTriggers = new Set(triggers);
+        if (uniqueTriggers.size !== triggers.length) {
+          res.writeHead(400);
+          res.end(JSON.stringify({
+            error: 'Duplicate triggers in profiles',
+            triggers
+          }));
+          return;
+        }
+
+        profiles = data.profiles.map((p: {
+          id?: string;
+          name: string;
+          trigger: string;
+          description?: string;
+          containerConfig?: ContainerConfig;
+          isActive?: boolean;
+        }, index: number) => ({
+          id: p.id || `profile-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+          name: p.name,
+          trigger: p.trigger,
+          description: p.description,
+          containerConfig: p.containerConfig,
+          isActive: p.isActive !== false,
+          addedAt: new Date().toISOString(),
+        }));
+      } else if (data.name && data.trigger) {
+        // 旧格式：单一 name + trigger
+        legacyName = data.name;
+        legacyTrigger = data.trigger;
+      }
+
+      // 构建更新后的群组信息，保留未更新的字段
+      const updatedGroup: RegisteredGroup = {
+        name: legacyName ?? existingGroup.name,
+        folder: existingGroup.folder, // folder 不能修改
+        trigger: legacyTrigger ?? existingGroup.trigger,
+        profiles: profiles ?? existingGroup.profiles,
+        defaultProfile: data.default_profile ?? existingGroup.defaultProfile,
+        added_at: existingGroup.added_at,
+        addedAt: existingGroup.addedAt,
+        requiresTrigger: data.requires_trigger ?? existingGroup.requiresTrigger,
+        isMain: existingGroup.isMain, // isMain 不能通过此接口修改
+        containerConfig: data.container_config ?? existingGroup.containerConfig,
+      };
+
+      // 更新群组
+      setRegisteredGroup(jid, updatedGroup);
+
+      // 获取最终写入的 profiles
+      const finalProfiles = getProfiles(jid);
+
+      logger.info({ channel: this.name, jid, profiles_count: finalProfiles.length }, 'Group updated');
+
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        status: 'ok',
+        jid,
+        folder: updatedGroup.folder,
+        is_main: updatedGroup.isMain,
+        requires_trigger: updatedGroup.requiresTrigger,
+        profiles: finalProfiles,
+        profiles_count: finalProfiles.length,
+      }));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ channel: this.name, error: errorMessage }, 'Failed to update group');
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: errorMessage }));
+    }
   }
 
   private async handleClearSession(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
