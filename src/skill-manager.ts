@@ -26,6 +26,22 @@ export interface SkillDetail extends SkillInfo {
 }
 
 /**
+ * 验证 skillId 是否安全（防止路径遍历）
+ */
+function isValidSkillId(skillId: string): boolean {
+  // 禁止路径遍历
+  if (skillId.includes('..') || skillId.includes('/') || skillId.includes('\\')) {
+    return false;
+  }
+  // 禁止空字符串
+  if (!skillId || skillId.trim() === '') {
+    return false;
+  }
+  // 只允许安全字符：字母、数字、连字符、下划线
+  return /^[a-zA-Z0-9_-]+$/.test(skillId);
+}
+
+/**
  * 解析 SKILL.md 的 YAML frontmatter
  */
 function parseFrontmatter(content: string): { name: string; description: string } | null {
@@ -81,6 +97,8 @@ export function listGlobalSkills(): SkillInfo[] {
  * 获取指定 skill 的详情
  */
 export function getGlobalSkill(skillId: string): SkillDetail | null {
+  if (!isValidSkillId(skillId)) return null;
+
   const skillDir = path.join(SKILLS_DIR, skillId);
   if (!fs.existsSync(skillDir) || !fs.statSync(skillDir).isDirectory()) {
     return null;
@@ -119,6 +137,8 @@ export function getGlobalSkill(skillId: string): SkillDetail | null {
  * 检查 skill 是否存在
  */
 export function skillExists(skillId: string): boolean {
+  if (!isValidSkillId(skillId)) return false;
+
   const skillDir = path.join(SKILLS_DIR, skillId);
   if (!fs.existsSync(skillDir) || !fs.statSync(skillDir).isDirectory()) {
     return false;
@@ -131,6 +151,9 @@ export function skillExists(skillId: string): boolean {
  * 创建新 skill
  */
 export function createGlobalSkill(skillId: string, content: string): void {
+  if (!isValidSkillId(skillId)) throw new Error('Invalid skillId');
+  if (skillExists(skillId)) throw new Error('Skill already exists');
+
   const skillDir = path.join(SKILLS_DIR, skillId);
   fs.mkdirSync(skillDir, { recursive: true });
 
@@ -144,6 +167,8 @@ export function createGlobalSkill(skillId: string, content: string): void {
  * 更新 skill 内容
  */
 export function updateGlobalSkill(skillId: string, content: string): void {
+  if (!isValidSkillId(skillId)) throw new Error('Invalid skillId');
+
   const skillFile = path.join(SKILLS_DIR, skillId, 'SKILL.md');
   if (!fs.existsSync(skillFile)) {
     throw new Error(`Skill not found: ${skillId}`);
@@ -157,6 +182,8 @@ export function updateGlobalSkill(skillId: string, content: string): void {
  * 删除 skill
  */
 export function deleteGlobalSkill(skillId: string): void {
+  if (!isValidSkillId(skillId)) throw new Error('Invalid skillId');
+
   const skillDir = path.join(SKILLS_DIR, skillId);
   if (!fs.existsSync(skillDir)) {
     throw new Error(`Skill not found: ${skillId}`);
