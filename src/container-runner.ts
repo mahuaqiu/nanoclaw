@@ -19,7 +19,12 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
-import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
+import {
+  resolveGroupFolderPath,
+  resolveGroupIpcPath,
+  resolveProfileIpcPath,
+  resolveProfileSessionPath,
+} from './group-folder.js';
 import { logger } from './logger.js';
 import {
   CONTAINER_RUNTIME_BIN,
@@ -172,17 +177,20 @@ function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
-  const groupSessionsDir = path.join(
-    DATA_DIR,
-    'sessions',
+  // Per-profile Claude sessions directory (isolated from other profiles)
+  // Each profile gets their own .claude/ to prevent cross-profile session access
+  const groupSessionsDir = resolveProfileSessionPath(
     group.folder,
-    '.claude',
+    profileId || 'default',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   // Set permissions to allow agent container (running as node user) to write
-  fs.chmodSync(groupSessionsDir, 0o777);
+  // On Windows, chmod may not work as expected, so we catch errors
+  try {
+    fs.chmodSync(groupSessionsDir, 0o777);
+  } catch {
+    // Windows doesn't support chmod on directories, ignore
+  }
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -225,7 +233,11 @@ function buildVolumeMounts(
   // Sync only assigned skills to profile directory
   if (assignedSkillIds.length > 0) {
     fs.mkdirSync(profileSkillsDir, { recursive: true });
-    fs.chmodSync(profileSkillsDir, 0o777);
+    try {
+      fs.chmodSync(profileSkillsDir, 0o777);
+    } catch {
+      // Windows doesn't support chmod on directories, ignore
+    }
     for (const skillId of assignedSkillIds) {
       const skill = getGlobalSkill(skillId);
       if (skill) {
@@ -251,17 +263,22 @@ function buildVolumeMounts(
     });
   }
 
-  // Per-group IPC namespace: each group gets its own IPC directory
-  // This prevents cross-group privilege escalation via IPC
-  const groupIpcDir = resolveGroupIpcPath(group.folder);
+  // Per-profile IPC namespace: each profile gets its own IPC directory
+  // This prevents cross-profile privilege escalation via IPC
+  const groupIpcDir = resolveProfileIpcPath(group.folder, profileId || 'default');
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
   // Set permissions to allow agent container (running as node user) to write
-  fs.chmodSync(groupIpcDir, 0o777);
-  fs.chmodSync(path.join(groupIpcDir, 'messages'), 0o777);
-  fs.chmodSync(path.join(groupIpcDir, 'tasks'), 0o777);
-  fs.chmodSync(path.join(groupIpcDir, 'input'), 0o777);
+  // On Windows, chmod may not work as expected, so we catch errors
+  try {
+    fs.chmodSync(groupIpcDir, 0o777);
+    fs.chmodSync(path.join(groupIpcDir, 'messages'), 0o777);
+    fs.chmodSync(path.join(groupIpcDir, 'tasks'), 0o777);
+    fs.chmodSync(path.join(groupIpcDir, 'input'), 0o777);
+  } catch {
+    // Windows doesn't support chmod on directories, ignore
+  }
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
@@ -396,7 +413,10 @@ export async function runContainerAgent(
 
   const mounts = buildVolumeMounts(group, input.isMain, input.profileId);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
-  const containerName = `nanoclaw-${safeName}-${Date.now()}`;
+  const profileSuffix = input.profileId
+    ? `-${input.profileId.replace(/[^a-zA-Z0-9-]/g, '-')}`
+    : '';
+  const containerName = `nanoclaw-${safeName}${profileSuffix}-${Date.now()}`;
   // Main group uses the default OneCLI agent; others use their own agent.
   const agentIdentifier = input.isMain
     ? undefined
@@ -792,9 +812,10 @@ export function writeTasksSnapshot(
     status: string;
     next_run: string | null;
   }>,
+  profileId?: string,
 ): void {
-  // Write filtered tasks to the group's IPC directory
-  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  // Write filtered tasks to the profile's IPC directory
+  const groupIpcDir = resolveProfileIpcPath(groupFolder, profileId || 'default');
   fs.mkdirSync(groupIpcDir, { recursive: true });
 
   // Main sees all tasks, others only see their own
@@ -823,8 +844,9 @@ export function writeGroupsSnapshot(
   isMain: boolean,
   groups: AvailableGroup[],
   _registeredJids: Set<string>,
+  profileId?: string,
 ): void {
-  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  const groupIpcDir = resolveProfileIpcPath(groupFolder, profileId || 'default');
   fs.mkdirSync(groupIpcDir, { recursive: true });
 
   // Main sees all groups; others see nothing (they can't activate groups)

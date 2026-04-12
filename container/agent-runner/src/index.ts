@@ -32,6 +32,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  profileId?: string; // Profile ID for multi-profile support
   script?: string;
 }
 
@@ -41,6 +42,33 @@ interface ContainerOutput {
   newSessionId?: string;
   error?: string;
 }
+
+// IPC 消息类型定义（多 profile 支持）
+interface IpcBroadcastMessage {
+  type: 'broadcast_message';
+  messages: Array<{
+    sender: string;
+    senderName?: string;
+    text: string;
+    timestamp: string;
+  }>;
+  targetProfileId: string | null; // null 表示无人被 @
+}
+
+interface IpcObserverReply {
+  type: 'observer_reply';
+  replyProfileId: string;
+  replyProfileName: string;
+  replyText: string;
+  originalMessages: Array<{
+    sender: string;
+    senderName?: string;
+    text: string;
+    timestamp: string;
+  }>;
+}
+
+type IpcMessage = { type: 'message'; text: string } | IpcBroadcastMessage | IpcObserverReply;
 
 interface SessionEntry {
   sessionId: string;
@@ -326,8 +354,10 @@ function shouldClose(): boolean {
 /**
  * Drain all pending IPC input messages.
  * Returns messages found, or empty array.
+ * For multi-profile support, filters broadcast_message by targetProfileId.
+ * observer_reply messages are added as context markers.
  */
-function drainIpcInput(): string[] {
+function drainIpcInput(myProfileId?: string): string[] {
   try {
     fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
     const files = fs
@@ -339,10 +369,33 @@ function drainIpcInput(): string[] {
     for (const file of files) {
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        const data: IpcMessage = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
         fs.unlinkSync(filePath);
+
+        // 原始消息类型（向后兼容）
         if (data.type === 'message' && data.text) {
           messages.push(data.text);
+        }
+
+        // 广播消息类型：只有 targetProfileId 匹配才处理
+        if (data.type === 'broadcast_message') {
+          if (data.targetProfileId === myProfileId) {
+            // 被 @ 了 - 提取消息内容
+            const formatted = data.messages
+              .map((m) => `[${m.senderName || m.sender}] ${m.text}`)
+              .join('\n');
+            messages.push(formatted);
+          } else {
+            // 旁观者 - 不处理，只记录日志
+            log(`Received broadcast for other profile (${data.targetProfileId}), skipping`);
+          }
+        }
+
+        // 旁观者回复类型：记录其他 profile 的回复
+        if (data.type === 'observer_reply') {
+          const contextNote = `[旁观者记录] ${data.replyProfileName} 回复了:\n${data.replyText.slice(0, 500)}`;
+          messages.push(contextNote);
+          log(`Received observer reply from ${data.replyProfileName}`);
         }
       } catch (err) {
         log(
@@ -366,14 +419,14 @@ function drainIpcInput(): string[] {
  * Wait for a new IPC message or _close sentinel.
  * Returns the messages as a single string, or null if _close.
  */
-function waitForIpcMessage(): Promise<string | null> {
+function waitForIpcMessage(myProfileId?: string): Promise<string | null> {
   return new Promise((resolve) => {
     const poll = () => {
       if (shouldClose()) {
         resolve(null);
         return;
       }
-      const messages = drainIpcInput();
+      const messages = drainIpcInput(myProfileId);
       if (messages.length > 0) {
         resolve(messages.join('\n'));
         return;
@@ -417,7 +470,7 @@ async function runQuery(
       ipcPolling = false;
       return;
     }
-    const messages = drainIpcInput();
+    const messages = drainIpcInput(containerInput.profileId);
     for (const text of messages) {
       log(`Piping IPC message into active query (${text.length} chars)`);
       stream.push(text);
@@ -672,7 +725,7 @@ async function main(): Promise<void> {
   if (containerInput.isScheduledTask) {
     prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
   }
-  const pending = drainIpcInput();
+  const pending = drainIpcInput(containerInput.profileId);
   if (pending.length > 0) {
     log(`Draining ${pending.length} pending IPC messages into initial prompt`);
     prompt += '\n' + pending.join('\n');
@@ -737,7 +790,7 @@ async function main(): Promise<void> {
       log('Query ended, waiting for next IPC message...');
 
       // Wait for the next message or _close sentinel
-      const nextMessage = await waitForIpcMessage();
+      const nextMessage = await waitForIpcMessage(containerInput.profileId);
       if (nextMessage === null) {
         log('Close sentinel received, exiting');
         break;

@@ -11,8 +11,9 @@ export interface ChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   // Session management callbacks (for HTTP API channel)
-  deleteSession?: (groupFolder: string) => void;
-  getSession?: (groupFolder: string) => string | undefined;
+  // 支持多 profile：profileId 可选，不传则操作所有 profile
+  deleteSession?: (groupFolder: string, profileId?: string) => void;
+  getSession?: (groupFolder: string, profileId?: string) => string | undefined;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

@@ -42,3 +42,64 @@ export function resolveGroupIpcPath(folder: string): string {
   ensureWithinBase(ipcBaseDir, ipcPath);
   return ipcPath;
 }
+
+// --- Profile-specific paths (multi-profile support) ---
+
+const PROFILE_ID_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/;
+
+/**
+ * 验证 profile ID 格式
+ * Profile ID 可以是字母、数字、下划线、短横线组成，但不能以短横线开头
+ */
+export function isValidProfileId(profileId: string): boolean {
+  if (!profileId) return false;
+  if (profileId !== profileId.trim()) return false;
+  if (!PROFILE_ID_PATTERN.test(profileId)) return false;
+  if (profileId.includes('/') || profileId.includes('\\')) return false;
+  if (profileId.includes('..')) return false;
+  return true;
+}
+
+export function assertValidProfileId(profileId: string): void {
+  if (!isValidProfileId(profileId)) {
+    throw new Error(`Invalid profile ID "${profileId}"`);
+  }
+}
+
+/**
+ * 解析 profile 专属的 IPC 目录路径
+ * 格式: DATA_DIR/ipc/{folder}/profiles/{profileId}/
+ */
+export function resolveProfileIpcPath(folder: string, profileId: string): string {
+  assertValidGroupFolder(folder);
+  assertValidProfileId(profileId);
+  const ipcBaseDir = path.resolve(DATA_DIR, 'ipc');
+  const ipcPath = path.resolve(ipcBaseDir, folder, 'profiles', profileId);
+  ensureWithinBase(ipcBaseDir, ipcPath);
+  return ipcPath;
+}
+
+/**
+ * 解析 profile 专属的 Session 目录路径
+ * 格式: DATA_DIR/sessions/{folder}/profiles/{profileId}/.claude/
+ */
+export function resolveProfileSessionPath(folder: string, profileId: string): string {
+  assertValidGroupFolder(folder);
+  assertValidProfileId(profileId);
+  const sessionBaseDir = path.resolve(DATA_DIR, 'sessions');
+  const sessionPath = path.resolve(sessionBaseDir, folder, 'profiles', profileId, '.claude');
+  ensureWithinBase(sessionBaseDir, sessionPath);
+  return sessionPath;
+}
+
+/**
+ * 解析 profile 专属的工作目录路径（用于 CLAUDE.md 等）
+ * 格式: GROUPS_DIR/{folder}/profiles/{profileId}/
+ */
+export function resolveProfileFolderPath(folder: string, profileId: string): string {
+  assertValidGroupFolder(folder);
+  assertValidProfileId(profileId);
+  const profilePath = path.resolve(GROUPS_DIR, folder, 'profiles', profileId);
+  ensureWithinBase(GROUPS_DIR, profilePath);
+  return profilePath;
+}

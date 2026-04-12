@@ -32,6 +32,7 @@ export interface IpcDeps {
     isMain: boolean,
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
+    profileId?: string,
   ) => void;
   onTasksChanged: () => void;
 }

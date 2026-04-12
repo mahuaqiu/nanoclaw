@@ -3,11 +3,13 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { resolveProfileIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 
 interface QueuedTask {
   id: string;
   groupJid: string;
+  profileId?: string; // Profile ID for task targeting
   fn: () => Promise<void>;
 }
 
@@ -20,14 +22,17 @@ interface GroupState {
   isTaskContainer: boolean;
   runningTaskId: string | null;
   pendingMessages: boolean;
+  pendingMessagesProfile?: string; // Which profile to process pending messages
   pendingTasks: QueuedTask[];
   process: ChildProcess | null;
   containerName: string | null;
   groupFolder: string | null;
+  profileId: string | null; // Which profile this container belongs to
   retryCount: number;
 }
 
 export class GroupQueue {
+  // 使用复合键 groupJid:profileId 标识每个 profile 的容器状态
   private groups = new Map<string, GroupState>();
   private activeCount = 0;
   private waitingGroups: string[] = [];
@@ -35,8 +40,14 @@ export class GroupQueue {
     null;
   private shuttingDown = false;
 
-  private getGroup(groupJid: string): GroupState {
-    let state = this.groups.get(groupJid);
+  // 生成复合键
+  private getKey(groupJid: string, profileId?: string): string {
+    return `${groupJid}:${profileId || 'default'}`;
+  }
+
+  private getGroup(groupJid: string, profileId?: string): GroupState {
+    const key = this.getKey(groupJid, profileId);
+    let state = this.groups.get(key);
     if (!state) {
       state = {
         active: false,
@@ -44,13 +55,15 @@ export class GroupQueue {
         isTaskContainer: false,
         runningTaskId: null,
         pendingMessages: false,
+        pendingMessagesProfile: profileId,
         pendingTasks: [],
         process: null,
         containerName: null,
         groupFolder: null,
+        profileId: profileId || null,
         retryCount: 0,
       };
-      this.groups.set(groupJid, state);
+      this.groups.set(key, state);
     }
     return state;
   }
@@ -59,73 +72,94 @@ export class GroupQueue {
     this.processMessagesFn = fn;
   }
 
-  enqueueMessageCheck(groupJid: string): void {
+  /**
+   * 检查是否有消息需要处理，如果容器活跃则排队，否则启动容器
+   * @param groupJid 群组 JID
+   * @param profileId 目标 profile ID（可选，默认为 'default'）
+   */
+  enqueueMessageCheck(groupJid: string, profileId?: string): void {
     if (this.shuttingDown) return;
 
-    const state = this.getGroup(groupJid);
+    const state = this.getGroup(groupJid, profileId);
 
     if (state.active) {
       state.pendingMessages = true;
-      logger.debug({ groupJid }, 'Container active, message queued');
+      logger.debug({ groupJid, profileId }, 'Container active, message queued');
       return;
     }
 
     if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
       state.pendingMessages = true;
-      if (!this.waitingGroups.includes(groupJid)) {
-        this.waitingGroups.push(groupJid);
+      const key = this.getKey(groupJid, profileId);
+      if (!this.waitingGroups.includes(key)) {
+        this.waitingGroups.push(key);
       }
       logger.debug(
-        { groupJid, activeCount: this.activeCount },
+        { groupJid, profileId, activeCount: this.activeCount },
         'At concurrency limit, message queued',
       );
       return;
     }
 
-    this.runForGroup(groupJid, 'messages').catch((err) =>
-      logger.error({ groupJid, err }, 'Unhandled error in runForGroup'),
+    this.runForGroup(groupJid, 'messages', profileId).catch((err) =>
+      logger.error({ groupJid, profileId, err }, 'Unhandled error in runForGroup'),
     );
   }
 
-  enqueueTask(groupJid: string, taskId: string, fn: () => Promise<void>): void {
+  enqueueTask(
+    groupJid: string,
+    taskId: string,
+    fn: () => Promise<void>,
+    profileId?: string,
+  ): void {
     if (this.shuttingDown) return;
 
-    const state = this.getGroup(groupJid);
+    const state = this.getGroup(groupJid, profileId);
 
     // Prevent double-queuing: check both pending and currently-running task
     if (state.runningTaskId === taskId) {
-      logger.debug({ groupJid, taskId }, 'Task already running, skipping');
+      logger.debug({ groupJid, taskId, profileId }, 'Task already running, skipping');
       return;
     }
     if (state.pendingTasks.some((t) => t.id === taskId)) {
-      logger.debug({ groupJid, taskId }, 'Task already queued, skipping');
+      logger.debug({ groupJid, taskId, profileId }, 'Task already queued, skipping');
       return;
     }
 
     if (state.active) {
-      state.pendingTasks.push({ id: taskId, groupJid, fn });
+      state.pendingTasks.push({ id: taskId, groupJid, profileId, fn });
       if (state.idleWaiting) {
-        this.closeStdin(groupJid);
+        this.closeStdin(groupJid, profileId);
       }
-      logger.debug({ groupJid, taskId }, 'Container active, task queued');
+      logger.debug({ groupJid, taskId, profileId }, 'Container active, task queued');
       return;
     }
 
     if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
-      state.pendingTasks.push({ id: taskId, groupJid, fn });
-      if (!this.waitingGroups.includes(groupJid)) {
-        this.waitingGroups.push(groupJid);
+      state.pendingTasks.push({ id: taskId, groupJid, profileId, fn });
+      const key = this.getKey(groupJid, profileId);
+      if (!this.waitingGroups.includes(key)) {
+        this.waitingGroups.push(key);
       }
       logger.debug(
-        { groupJid, taskId, activeCount: this.activeCount },
+        { groupJid, taskId, profileId, activeCount: this.activeCount },
         'At concurrency limit, task queued',
       );
       return;
     }
 
     // Run immediately
-    this.runTask(groupJid, { id: taskId, groupJid, fn }).catch((err) =>
-      logger.error({ groupJid, taskId, err }, 'Unhandled error in runTask'),
+    this.runTask(
+      groupJid,
+      {
+        id: taskId,
+        groupJid,
+        profileId,
+        fn,
+      },
+      profileId,
+    ).catch((err) =>
+      logger.error({ groupJid, taskId, profileId, err }, 'Unhandled error in runTask'),
     );
   }
 
@@ -134,22 +168,24 @@ export class GroupQueue {
     proc: ChildProcess,
     containerName: string,
     groupFolder?: string,
+    profileId?: string,
   ): void {
-    const state = this.getGroup(groupJid);
+    const state = this.getGroup(groupJid, profileId);
     state.process = proc;
     state.containerName = containerName;
     if (groupFolder) state.groupFolder = groupFolder;
+    state.profileId = profileId || null;
   }
 
   /**
    * Mark the container as idle-waiting (finished work, waiting for IPC input).
    * If tasks are pending, preempt the idle container immediately.
    */
-  notifyIdle(groupJid: string): void {
-    const state = this.getGroup(groupJid);
+  notifyIdle(groupJid: string, profileId?: string): void {
+    const state = this.getGroup(groupJid, profileId);
     state.idleWaiting = true;
     if (state.pendingTasks.length > 0) {
-      this.closeStdin(groupJid);
+      this.closeStdin(groupJid, profileId);
     }
   }
 
@@ -157,13 +193,15 @@ export class GroupQueue {
    * Send a follow-up message to the active container via IPC file.
    * Returns true if the message was written, false if no active container.
    */
-  sendMessage(groupJid: string, text: string): boolean {
-    const state = this.getGroup(groupJid);
+  sendMessage(groupJid: string, text: string, profileId?: string): boolean {
+    const state = this.getGroup(groupJid, profileId);
     if (!state.active || !state.groupFolder || state.isTaskContainer)
       return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
-    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
+    // 使用 profile 专属的 IPC 目录
+    const ipcDir = resolveProfileIpcPath(state.groupFolder, state.profileId || 'default');
+    const inputDir = path.join(ipcDir, 'input');
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
@@ -180,11 +218,13 @@ export class GroupQueue {
   /**
    * Signal the active container to wind down by writing a close sentinel.
    */
-  closeStdin(groupJid: string): void {
-    const state = this.getGroup(groupJid);
+  closeStdin(groupJid: string, profileId?: string): void {
+    const state = this.getGroup(groupJid, profileId);
     if (!state.active || !state.groupFolder) return;
 
-    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
+    // 使用 profile 专属的 IPC 目录
+    const ipcDir = resolveProfileIpcPath(state.groupFolder, state.profileId || 'default');
+    const inputDir = path.join(ipcDir, 'input');
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(path.join(inputDir, '_close'), '');
@@ -196,17 +236,19 @@ export class GroupQueue {
   private async runForGroup(
     groupJid: string,
     reason: 'messages' | 'drain',
+    profileId?: string,
   ): Promise<void> {
-    const state = this.getGroup(groupJid);
+    const state = this.getGroup(groupJid, profileId);
     state.active = true;
     state.idleWaiting = false;
     state.isTaskContainer = false;
     state.pendingMessages = false;
+    state.profileId = profileId || null;
     this.activeCount++;
 
     logger.debug(
-      { groupJid, reason, activeCount: this.activeCount },
-      'Starting container for group',
+      { groupJid, profileId, reason, activeCount: this.activeCount },
+      'Starting container for group profile',
     );
 
     try {
@@ -215,39 +257,45 @@ export class GroupQueue {
         if (success) {
           state.retryCount = 0;
         } else {
-          this.scheduleRetry(groupJid, state);
+          this.scheduleRetry(groupJid, state, profileId);
         }
       }
     } catch (err) {
-      logger.error({ groupJid, err }, 'Error processing messages for group');
-      this.scheduleRetry(groupJid, state);
+      logger.error({ groupJid, profileId, err }, 'Error processing messages for group');
+      this.scheduleRetry(groupJid, state, profileId);
     } finally {
       state.active = false;
       state.process = null;
       state.containerName = null;
       state.groupFolder = null;
+      state.profileId = null;
       this.activeCount--;
-      this.drainGroup(groupJid);
+      this.drainGroup(groupJid, profileId);
     }
   }
 
-  private async runTask(groupJid: string, task: QueuedTask): Promise<void> {
-    const state = this.getGroup(groupJid);
+  private async runTask(
+    groupJid: string,
+    task: QueuedTask,
+    profileId?: string,
+  ): Promise<void> {
+    const state = this.getGroup(groupJid, profileId);
     state.active = true;
     state.idleWaiting = false;
     state.isTaskContainer = true;
     state.runningTaskId = task.id;
+    state.profileId = profileId || null;
     this.activeCount++;
 
     logger.debug(
-      { groupJid, taskId: task.id, activeCount: this.activeCount },
+      { groupJid, taskId: task.id, profileId, activeCount: this.activeCount },
       'Running queued task',
     );
 
     try {
       await task.fn();
     } catch (err) {
-      logger.error({ groupJid, taskId: task.id, err }, 'Error running task');
+      logger.error({ groupJid, taskId: task.id, profileId, err }, 'Error running task');
     } finally {
       state.active = false;
       state.isTaskContainer = false;
@@ -255,16 +303,17 @@ export class GroupQueue {
       state.process = null;
       state.containerName = null;
       state.groupFolder = null;
+      state.profileId = null;
       this.activeCount--;
-      this.drainGroup(groupJid);
+      this.drainGroup(groupJid, profileId);
     }
   }
 
-  private scheduleRetry(groupJid: string, state: GroupState): void {
+  private scheduleRetry(groupJid: string, state: GroupState, profileId?: string): void {
     state.retryCount++;
     if (state.retryCount > MAX_RETRIES) {
       logger.error(
-        { groupJid, retryCount: state.retryCount },
+        { groupJid, profileId, retryCount: state.retryCount },
         'Max retries exceeded, dropping messages (will retry on next incoming message)',
       );
       state.retryCount = 0;
@@ -273,27 +322,27 @@ export class GroupQueue {
 
     const delayMs = BASE_RETRY_MS * Math.pow(2, state.retryCount - 1);
     logger.info(
-      { groupJid, retryCount: state.retryCount, delayMs },
+      { groupJid, profileId, retryCount: state.retryCount, delayMs },
       'Scheduling retry with backoff',
     );
     setTimeout(() => {
       if (!this.shuttingDown) {
-        this.enqueueMessageCheck(groupJid);
+        this.enqueueMessageCheck(groupJid, profileId);
       }
     }, delayMs);
   }
 
-  private drainGroup(groupJid: string): void {
+  private drainGroup(groupJid: string, profileId?: string): void {
     if (this.shuttingDown) return;
 
-    const state = this.getGroup(groupJid);
+    const state = this.getGroup(groupJid, profileId);
 
     // Tasks first (they won't be re-discovered from SQLite like messages)
     if (state.pendingTasks.length > 0) {
       const task = state.pendingTasks.shift()!;
-      this.runTask(groupJid, task).catch((err) =>
+      this.runTask(groupJid, task, task.profileId).catch((err) =>
         logger.error(
-          { groupJid, taskId: task.id, err },
+          { groupJid, taskId: task.id, profileId: task.profileId, err },
           'Unhandled error in runTask (drain)',
         ),
       );
@@ -302,16 +351,16 @@ export class GroupQueue {
 
     // Then pending messages
     if (state.pendingMessages) {
-      this.runForGroup(groupJid, 'drain').catch((err) =>
+      this.runForGroup(groupJid, 'drain', state.pendingMessagesProfile).catch((err) =>
         logger.error(
-          { groupJid, err },
+          { groupJid, profileId: state.pendingMessagesProfile, err },
           'Unhandled error in runForGroup (drain)',
         ),
       );
       return;
     }
 
-    // Nothing pending for this group; check if other groups are waiting for a slot
+    // Nothing pending for this group profile; check if other groups are waiting for a slot
     this.drainWaiting();
   }
 
@@ -320,27 +369,29 @@ export class GroupQueue {
       this.waitingGroups.length > 0 &&
       this.activeCount < MAX_CONCURRENT_CONTAINERS
     ) {
-      const nextJid = this.waitingGroups.shift()!;
-      const state = this.getGroup(nextJid);
+      const key = this.waitingGroups.shift()!;
+      // 解析复合键
+      const [groupJid, profileId] = key.split(':');
+      const state = this.getGroup(groupJid, profileId === 'undefined' ? undefined : profileId);
 
       // Prioritize tasks over messages
       if (state.pendingTasks.length > 0) {
         const task = state.pendingTasks.shift()!;
-        this.runTask(nextJid, task).catch((err) =>
+        this.runTask(groupJid, task, task.profileId).catch((err) =>
           logger.error(
-            { groupJid: nextJid, taskId: task.id, err },
+            { groupJid, taskId: task.id, profileId: task.profileId, err },
             'Unhandled error in runTask (waiting)',
           ),
         );
       } else if (state.pendingMessages) {
-        this.runForGroup(nextJid, 'drain').catch((err) =>
+        this.runForGroup(groupJid, 'drain', state.pendingMessagesProfile).catch((err) =>
           logger.error(
-            { groupJid: nextJid, err },
+            { groupJid, profileId: state.pendingMessagesProfile, err },
             'Unhandled error in runForGroup (waiting)',
           ),
         );
       }
-      // If neither pending, skip this group
+      // If neither pending, skip this group profile
     }
   }
 

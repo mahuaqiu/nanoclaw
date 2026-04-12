@@ -1379,14 +1379,46 @@ POST /callback/message
 | `chat_id` | string | 聊天 ID（去掉 `http:` 前缀） |
 | `message` | string | AI 回复内容 |
 | `timestamp` | string | ISO 时间戳 |
+| `profile_id` | string | **角色 ID**（如 `xiaoma`、`小威`），多角色群组时有效 |
+| `profile_name` | string | **角色显示名称**（如 `小马助手`、`小威`），多角色群组时有效 |
+| `trigger_word` | string | **触发词**（如 `@xiaoma`、`@小威`），多角色群组时有效 |
 
-**请求示例**：
+**请求示例（单角色群组）**：
 
 ```json
 {
   "chat_id": "group-001",
   "message": "这是 AI 的回复内容...",
-  "timestamp": "2024-04-12T10:30:00Z"
+  "timestamp": "2024-04-12T10:30:00Z",
+  "profile_id": null,
+  "profile_name": null,
+  "trigger_word": null
+}
+```
+
+**请求示例（多角色群组 - xiaoma 回复）**：
+
+```json
+{
+  "chat_id": "group-001",
+  "message": "你好！我是小马助手 🐴...",
+  "timestamp": "2024-04-12T10:30:00Z",
+  "profile_id": "xiaoma",
+  "profile_name": "小马助手",
+  "trigger_word": "@xiaoma"
+}
+```
+
+**请求示例（多角色群组 - 小威 回复）**：
+
+```json
+{
+  "chat_id": "group-001",
+  "message": "在的！我是小威...",
+  "timestamp": "2024-04-12T10:35:00Z",
+  "profile_id": "B0jEB0PDSot8pjrAfoKqe",
+  "profile_name": "小威",
+  "trigger_word": "@小威"
 }
 ```
 
@@ -1411,6 +1443,7 @@ GET /api/outbox/http:group-001
 - 支持 HTTP 和 HTTPS
 - 超时时间：10 秒
 - 回调失败不会阻塞系统，回复仍可在 outbox 中获取
+- **轮询模式不包含 profile 信息**，多角色群组建议使用回调模式
 
 ---
 

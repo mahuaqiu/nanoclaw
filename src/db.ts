@@ -71,9 +71,12 @@ function createSchema(database: Database.Database): void {
       value TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sessions (
-      group_folder TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL
+      group_folder TEXT NOT NULL,
+      profile_id TEXT NOT NULL DEFAULT 'default',
+      session_id TEXT NOT NULL,
+      PRIMARY KEY (group_folder, profile_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_sessions_folder ON sessions(group_folder);
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -166,6 +169,10 @@ function createSchema(database: Database.Database): void {
   // Migrate existing registered_groups to profiles format
   // For each existing group, create a default profile with its trigger
   migrateLegacyGroupsToProfiles(database);
+
+  // Migrate sessions table to support multi-profile
+  // Add profile_id column if it doesn't exist (SQLite ALTER TABLE limitations require workaround)
+  migrateSessionsToMultiProfile(database);
 
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
@@ -603,32 +610,85 @@ export function setRouterState(key: string, value: string): void {
   ).run(key, value);
 }
 
-// --- Session accessors ---
+// --- Session accessors (multi-profile support) ---
 
-export function getSession(groupFolder: string): string | undefined {
+// 默认 profile ID（向后兼容）
+const DEFAULT_PROFILE_ID = 'default';
+
+/**
+ * 获取指定 profile 的 session
+ * @param groupFolder 群组文件夹名
+ * @param profileId Profile ID，默认为 'default'
+ */
+export function getSession(
+  groupFolder: string,
+  profileId: string = DEFAULT_PROFILE_ID,
+): string | undefined {
   const row = db
-    .prepare('SELECT session_id FROM sessions WHERE group_folder = ?')
-    .get(groupFolder) as { session_id: string } | undefined;
+    .prepare('SELECT session_id FROM sessions WHERE group_folder = ? AND profile_id = ?')
+    .get(groupFolder, profileId) as { session_id: string } | undefined;
   return row?.session_id;
 }
 
-export function setSession(groupFolder: string, sessionId: string): void {
+/**
+ * 设置指定 profile 的 session
+ * @param groupFolder 群组文件夹名
+ * @param sessionId Session ID
+ * @param profileId Profile ID，默认为 'default'
+ */
+export function setSession(
+  groupFolder: string,
+  sessionId: string,
+  profileId: string = DEFAULT_PROFILE_ID,
+): void {
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+    'INSERT OR REPLACE INTO sessions (group_folder, profile_id, session_id) VALUES (?, ?, ?)',
+  ).run(groupFolder, profileId, sessionId);
 }
 
-export function deleteSession(groupFolder: string): void {
-  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
+/**
+ * 删除指定 profile 的 session，或删除群组所有 profile 的 session
+ * @param groupFolder 群组文件夹名
+ * @param profileId Profile ID，如果不传则删除所有 profile 的 session
+ */
+export function deleteSession(groupFolder: string, profileId?: string): void {
+  if (profileId) {
+    db.prepare('DELETE FROM sessions WHERE group_folder = ? AND profile_id = ?').run(groupFolder, profileId);
+  } else {
+    db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
+  }
 }
 
-export function getAllSessions(): Record<string, string> {
+/**
+ * 获取所有 session，返回嵌套结构
+ * @returns Record<groupFolder, Record<profileId, sessionId>>
+ */
+export function getAllSessions(): Record<string, Record<string, string>> {
   const rows = db
-    .prepare('SELECT group_folder, session_id FROM sessions')
-    .all() as Array<{ group_folder: string; session_id: string }>;
+    .prepare('SELECT group_folder, profile_id, session_id FROM sessions')
+    .all() as Array<{ group_folder: string; profile_id: string; session_id: string }>;
+  const result: Record<string, Record<string, string>> = {};
+  for (const row of rows) {
+    if (!result[row.group_folder]) {
+      result[row.group_folder] = {};
+    }
+    result[row.group_folder][row.profile_id] = row.session_id;
+  }
+  return result;
+}
+
+/**
+ * 获取群组所有 profile 的 session（便捷方法）
+ * @param groupFolder 群组文件夹名
+ * @returns Record<profileId, sessionId>
+ */
+export function getGroupSessions(groupFolder: string): Record<string, string> {
+  const rows = db
+    .prepare('SELECT profile_id, session_id FROM sessions WHERE group_folder = ?')
+    .all(groupFolder) as Array<{ profile_id: string; session_id: string }>;
   const result: Record<string, string> = {};
   for (const row of rows) {
-    result[row.group_folder] = row.session_id;
+    result[row.profile_id] = row.session_id;
   }
   return result;
 }
@@ -1062,6 +1122,48 @@ function migrateLegacyGroupsToProfiles(database: Database.Database): void {
       'Migrated legacy group to profiles format',
     );
   }
+}
+
+/**
+ * Migrate sessions table to support multi-profile
+ * SQLite doesn't support ALTER TABLE for primary key changes, so we need to recreate the table
+ */
+function migrateSessionsToMultiProfile(database: Database.Database): void {
+  // Check if profile_id column already exists
+  try {
+    database.exec('SELECT profile_id FROM sessions LIMIT 1');
+    // Column exists, migration already done
+    return;
+  } catch {
+    // Column doesn't exist, need to migrate
+  }
+
+  logger.info('Migrating sessions table to multi-profile format');
+
+  // Create new table with correct schema
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS sessions_new (
+      group_folder TEXT NOT NULL,
+      profile_id TEXT NOT NULL DEFAULT 'default',
+      session_id TEXT NOT NULL,
+      PRIMARY KEY (group_folder, profile_id)
+    )
+  `);
+
+  // Copy existing data with 'default' profile_id
+  database.exec(`
+    INSERT INTO sessions_new (group_folder, profile_id, session_id)
+    SELECT group_folder, 'default', session_id FROM sessions
+  `);
+
+  // Drop old table and rename new one
+  database.exec('DROP TABLE sessions');
+  database.exec('ALTER TABLE sessions_new RENAME TO sessions');
+
+  // Create index
+  database.exec('CREATE INDEX IF NOT EXISTS idx_sessions_folder ON sessions(group_folder)');
+
+  logger.info('Sessions table migration completed');
 }
 
 // --- Profile Skills accessors ---

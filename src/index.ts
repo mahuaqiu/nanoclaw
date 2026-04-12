@@ -70,7 +70,8 @@ import { logger } from './logger.js';
 export { escapeXml, formatMessages } from './router.js';
 
 let lastTimestamp = '';
-let sessions: Record<string, string> = {};
+// sessions: Record<groupFolder, Record<profileId, sessionId>>
+let sessions: Record<string, Record<string, string>> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
@@ -324,16 +325,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   );
 
   // Track idle timer for closing stdin when agent is idle
+  const profileId = matchedProfile?.id;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const resetIdleTimer = () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       logger.debug(
-        { group: group.name },
+        { group: group.name, profileId },
         'Idle timeout, closing container stdin',
       );
-      queue.closeStdin(chatJid);
+      queue.closeStdin(chatJid, profileId);
     }, IDLE_TIMEOUT);
   };
 
@@ -353,7 +355,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const groupName = matchedProfile?.name ?? group.name ?? group.folder;
       logger.info({ group: groupName }, `Agent output: ${raw.length} chars`);
       if (text) {
-        await channel.sendMessage(chatJid, text);
+        // 传递 profile 信息，让对端服务知道是哪个角色回复
+        await channel.sendMessage(chatJid, text, {
+          profileId: matchedProfile?.id,
+          profileName: matchedProfile?.name,
+          triggerWord: matchedProfile?.trigger,
+        });
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -361,7 +368,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
 
     if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
+      queue.notifyIdle(chatJid, profileId);
     }
 
     if (result.status === 'error') {
@@ -403,7 +410,9 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+  const profileId = profile?.id ?? 'default';
+  // 从嵌套结构中获取指定 profile 的 session
+  const sessionId = sessions[group.folder]?.[profileId];
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -420,6 +429,7 @@ async function runAgent(
       status: t.status,
       next_run: t.next_run,
     })),
+    profileId,
   );
 
   // Update available groups snapshot (main group only can see all groups)
@@ -429,14 +439,19 @@ async function runAgent(
     isMain,
     availableGroups,
     new Set(Object.keys(registeredGroups)),
+    profileId,
   );
 
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
+          // 使用嵌套结构存储 profile 专属的 session
+          if (!sessions[group.folder]) {
+            sessions[group.folder] = {};
+          }
+          sessions[group.folder][profileId] = output.newSessionId;
+          setSession(group.folder, output.newSessionId, profileId);
         }
         await onOutput(output);
       }
@@ -444,7 +459,6 @@ async function runAgent(
 
   // Get profile name for agent
   const profileName = profile?.name ?? group.name ?? ASSISTANT_NAME;
-  const profileId = profile?.id ?? 'default';
 
   try {
     const output = await runContainerAgent(
@@ -464,8 +478,11 @@ async function runAgent(
     );
 
     if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
+      if (!sessions[group.folder]) {
+        sessions[group.folder] = {};
+      }
+      sessions[group.folder][profileId] = output.newSessionId;
+      setSession(group.folder, output.newSessionId, profileId);
     }
 
     if (output.status === 'error') {
@@ -485,8 +502,10 @@ async function runAgent(
           { group: group.name, staleSessionId: sessionId, error: output.error },
           'Stale session detected — clearing for next retry',
         );
-        delete sessions[group.folder];
-        deleteSession(group.folder);
+        if (sessions[group.folder]) {
+          delete sessions[group.folder][profileId];
+        }
+        deleteSession(group.folder, profileId);
       }
 
       logger.error(
@@ -555,8 +574,9 @@ async function startMessageLoop(): Promise<void> {
           // For non-main groups, only act on trigger messages.
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
+          let matchedProfile: AgentProfile | undefined;
           if (needsTrigger) {
-            const matchedProfile = findMatchingProfile(group, groupMessages, chatJid);
+            matchedProfile = findMatchingProfile(group, groupMessages, chatJid);
             if (!matchedProfile) continue;
           }
 
@@ -572,9 +592,12 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          // 获取 profileId 用于消息路由
+          const profileId = matchedProfile?.id;
+
+          if (queue.sendMessage(chatJid, formatted, profileId)) {
             logger.debug(
-              { chatJid, count: messagesToSend.length },
+              { chatJid, profileId, count: messagesToSend.length },
               'Piped messages to active container',
             );
             lastAgentTimestamp[chatJid] =
@@ -588,7 +611,7 @@ async function startMessageLoop(): Promise<void> {
               );
           } else {
             // No active container — enqueue for a new one
-            queue.enqueueMessageCheck(chatJid);
+            queue.enqueueMessageCheck(chatJid, profileId);
           }
         }
       }
@@ -736,12 +759,25 @@ async function main(): Promise<void> {
       logger.info({ jid, folder: group.folder, isMain: group.isMain }, 'Group registered via channel API');
     },
     // Session management for HTTP API channel
-    deleteSession: (groupFolder: string) => {
-      delete sessions[groupFolder];
-      deleteSession(groupFolder);
-      logger.info({ groupFolder }, 'Session cleared via API');
+    deleteSession: (groupFolder: string, profileId?: string) => {
+      if (profileId) {
+        // 删除指定 profile 的 session
+        if (sessions[groupFolder]) {
+          delete sessions[groupFolder][profileId];
+        }
+        deleteSession(groupFolder, profileId);
+        logger.info({ groupFolder, profileId }, 'Session cleared via API');
+      } else {
+        // 删除所有 profile 的 session
+        delete sessions[groupFolder];
+        deleteSession(groupFolder);
+        logger.info({ groupFolder }, 'All sessions cleared via API');
+      }
     },
-    getSession: (groupFolder: string) => sessions[groupFolder],
+    getSession: (groupFolder: string, profileId?: string) => {
+      // 返回指定 profile 的 session（默认 'default'）
+      return sessions[groupFolder]?.[profileId ?? 'default'];
+    },
   };
 
   // Create and connect all registered channels.
@@ -798,8 +834,8 @@ async function main(): Promise<void> {
       );
     },
     getAvailableGroups,
-    writeGroupsSnapshot: (gf, im, ag, rj) =>
-      writeGroupsSnapshot(gf, im, ag, rj),
+    writeGroupsSnapshot: (gf, im, ag, rj, pid) =>
+      writeGroupsSnapshot(gf, im, ag, rj, pid),
     onTasksChanged: () => {
       const tasks = getAllTasks();
       const taskRows = tasks.map((t) => ({
@@ -813,7 +849,18 @@ async function main(): Promise<void> {
         next_run: t.next_run,
       }));
       for (const group of Object.values(registeredGroups)) {
-        writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
+        // Write to each profile's IPC directory
+        const profiles = group.profiles?.filter((p) => p.isActive) ?? [
+          { id: 'default', isActive: true },
+        ];
+        for (const profile of profiles) {
+          writeTasksSnapshot(
+            group.folder,
+            group.isMain === true,
+            taskRows,
+            profile.id,
+          );
+        }
       }
     },
   });

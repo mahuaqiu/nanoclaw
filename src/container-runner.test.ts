@@ -8,6 +8,9 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // Mock config
 vi.mock('./config.js', () => ({
+  ANTHROPIC_API_KEY: undefined,
+  ANTHROPIC_BASE_URL: undefined,
+  CLAUDE_MODEL: undefined,
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
@@ -57,6 +60,17 @@ vi.mock('./container-runtime.js', () => ({
   hostGatewayArgs: () => [],
   readonlyMountArgs: (h: string, c: string) => ['-v', `${h}:${c}:ro`],
   stopContainer: vi.fn(),
+  volumesFromArgs: () => [],
+}));
+
+// Mock db.js for skills assignment
+vi.mock('./db.js', () => ({
+  getAssignedSkills: vi.fn(() => []),
+}));
+
+// Mock skill-manager.js
+vi.mock('./skill-manager.js', () => ({
+  getGlobalSkill: vi.fn(),
 }));
 
 // Mock OneCLI SDK

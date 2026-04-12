@@ -26,7 +26,7 @@ import http from 'http';
 import https from 'https';
 import url from 'url';
 import { registerChannel, ChannelOpts } from './registry.js';
-import { Channel, NewMessage, RegisteredGroup, AgentProfile, ContainerConfig } from '../types.js';
+import { Channel, NewMessage, RegisteredGroup, AgentProfile, ContainerConfig, SendMessageOptions } from '../types.js';
 import {
   addProfile,
   getProfiles,
@@ -90,15 +90,16 @@ class HttpApiChannel implements Channel {
     this.connected = true;
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string, options?: SendMessageOptions): Promise<void> {
     const chatId = jid.replace('http:', '');
     const callbackUrl = callbackUrls.get(jid);
 
     // If callback URL is registered, push the message directly
     if (callbackUrl) {
-      await this.pushToCallback(callbackUrl, chatId, text);
+      await this.pushToCallback(callbackUrl, chatId, text, options);
     } else {
       // Otherwise, add to outbox for polling mode
+      // Note: polling mode loses profile info - callback mode recommended for multi-profile groups
       if (!outbox.has(jid)) {
         outbox.set(jid, []);
       }
@@ -110,7 +111,12 @@ class HttpApiChannel implements Channel {
   /**
    * Push message to caller's callback URL
    */
-  private async pushToCallback(callbackUrl: string, chatId: string, message: string): Promise<void> {
+  private async pushToCallback(
+    callbackUrl: string,
+    chatId: string,
+    message: string,
+    profileOptions?: SendMessageOptions,
+  ): Promise<void> {
     const parsedUrl = new URL(callbackUrl);
     const isHttps = parsedUrl.protocol === 'https:';
     const client = isHttps ? https : http;
@@ -119,9 +125,13 @@ class HttpApiChannel implements Channel {
       chat_id: chatId,
       message: message,
       timestamp: new Date().toISOString(),
+      // 多 profile 支持：传递角色信息
+      profile_id: profileOptions?.profileId || null,
+      profile_name: profileOptions?.profileName || null,
+      trigger_word: profileOptions?.triggerWord || null,
     });
 
-    const options = {
+    const requestOptions = {
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (isHttps ? 443 : 80),
       path: parsedUrl.pathname + parsedUrl.search,
@@ -135,7 +145,7 @@ class HttpApiChannel implements Channel {
 
     try {
       await new Promise<void>((resolve, reject) => {
-        const req = client.request(options, (res) => {
+        const req = client.request(requestOptions, (res) => {
           let body = '';
           const statusCode = res.statusCode || 0;
           res.setEncoding('utf8');
