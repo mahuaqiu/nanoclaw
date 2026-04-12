@@ -259,6 +259,13 @@ class HttpApiChannel implements Channel {
       this.handleUpdateSkill(pathname, req, res);
     } else if (pathname?.startsWith('/api/skills/') && method === 'DELETE') {
       this.handleDeleteSkill(pathname, res);
+    // --- Profile skills assignment ---
+    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills$/) && method === 'GET') {
+      this.handleListProfileSkills(pathname, res);
+    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills\/[^/]+$/) && method === 'POST') {
+      this.handleAssignSkill(pathname, res);
+    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills\/[^/]+$/) && method === 'DELETE') {
+      this.handleRemoveSkill(pathname, res);
     } else {
       res.writeHead(404);
       res.end(JSON.stringify({ error: 'Not found' }));
@@ -834,6 +841,120 @@ class HttpApiChannel implements Channel {
       res.writeHead(500);
       res.end(JSON.stringify({ error: errorMessage }));
     }
+  }
+
+  // --- Profile skills assignment handlers ---
+
+  private handleListProfileSkills(pathname: string, res: http.ServerResponse): void {
+    const parts = pathname.replace('/api/profiles/', '').split('/');
+    const jid = parts[0];
+    const profileId = parts[1];
+
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+
+    if (!group) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Chat not registered', jid }));
+      return;
+    }
+
+    const existingProfile = getProfile(jid, profileId);
+    if (!existingProfile) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Profile not found', jid, profileId }));
+      return;
+    }
+
+    const assignedSkillIds = getAssignedSkills(jid, profileId);
+    const skills = assignedSkillIds.map((skillId) => {
+      const skill = getGlobalSkill(skillId);
+      return {
+        id: skillId,
+        name: skill?.name || skillId,
+      };
+    });
+
+    res.writeHead(200);
+    res.end(JSON.stringify({ jid, profileId, skills, count: skills.length }));
+  }
+
+  private handleAssignSkill(pathname: string, res: http.ServerResponse): void {
+    const parts = pathname.replace('/api/profiles/', '').split('/');
+    const jid = parts[0];
+    const profileId = parts[1];
+    const skillId = parts[3]; // parts[2] is 'skills'
+
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+
+    if (!group) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Chat not registered', jid }));
+      return;
+    }
+
+    const existingProfile = getProfile(jid, profileId);
+    if (!existingProfile) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Profile not found', jid, profileId }));
+      return;
+    }
+
+    if (!skillExists(skillId)) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Skill not found', skillId }));
+      return;
+    }
+
+    if (isSkillAssigned(jid, profileId, skillId)) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: 'Skill already assigned', skillId }));
+      return;
+    }
+
+    assignSkill(jid, profileId, skillId);
+
+    logger.info({ channel: this.name, jid, profileId, skillId }, 'Skill assigned to profile');
+
+    res.writeHead(200);
+    res.end(JSON.stringify({ status: 'ok', jid, profileId, skillId }));
+  }
+
+  private handleRemoveSkill(pathname: string, res: http.ServerResponse): void {
+    const parts = pathname.replace('/api/profiles/', '').split('/');
+    const jid = parts[0];
+    const profileId = parts[1];
+    const skillId = parts[3]; // parts[2] is 'skills'
+
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+
+    if (!group) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Chat not registered', jid }));
+      return;
+    }
+
+    const existingProfile = getProfile(jid, profileId);
+    if (!existingProfile) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Profile not found', jid, profileId }));
+      return;
+    }
+
+    if (!isSkillAssigned(jid, profileId, skillId)) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Skill not assigned to profile', skillId }));
+      return;
+    }
+
+    removeSkillAssignment(jid, profileId, skillId);
+
+    logger.info({ channel: this.name, jid, profileId, skillId }, 'Skill removed from profile');
+
+    res.writeHead(200);
+    res.end(JSON.stringify({ status: 'ok', jid, profileId, skillId }));
   }
 
   private readBody(req: http.IncomingMessage): Promise<string> {
