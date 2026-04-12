@@ -1,0 +1,98 @@
+# NanoClaw Docker Compose 配置
+# 使用前需要先构建 agent 容器镜像：cd container && docker build -t nanoclaw-agent:latest .
+
+services:
+  nanoclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nanoclaw
+    restart: unless-stopped
+
+    # 挂载 Docker socket，让 NanoClaw 能启动 agent 容器
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # 持久化存储目录
+      - nanoclaw-store:/app/store
+      - nanoclaw-groups:/app/groups
+      - nanoclaw-data:/app/data
+      - nanoclaw-logs:/app/logs
+      # 配置文件（如果需要自定义配置，取消下面的注释）
+      # - ./env:/app/.env:ro
+      # WhatsApp 认证文件（如果使用 WhatsApp，取消下面的注释）
+      # - nanoclaw-auth:/app/store/auth
+
+    environment:
+      # ===== 助手配置 =====
+      # 助手名称，用于触发模式（默认 @Andy）
+      - ASSISTANT_NAME=${ASSISTANT_NAME:-Andy}
+      # 助手是否有自己的号码（true/false）
+      - ASSISTANT_HAS_OWN_NUMBER=${ASSISTANT_HAS_OWN_NUMBER:-false}
+
+      # ===== 时区配置 =====
+      # 时区设置，用于消息时间格式化和定时任务
+      - TZ=${TZ:-Asia/Shanghai}
+
+      # ===== 容器配置 =====
+      # Agent 容器镜像名称（需要预先构建）
+      - CONTAINER_IMAGE=${CONTAINER_IMAGE:-nanoclaw-agent:latest}
+      # 容器超时时间（毫秒），默认 30 分钟
+      - CONTAINER_TIMEOUT=${CONTAINER_TIMEOUT:-1800000}
+      # 容器最大输出大小（字节），默认 10MB
+      - CONTAINER_MAX_OUTPUT_SIZE=${CONTAINER_MAX_OUTPUT_SIZE:-10485760}
+      # 每个 prompt 的最大消息数
+      - MAX_MESSAGES_PER_PROMPT=${MAX_MESSAGES_PER_PROMPT:-10}
+      # 空闲超时时间（毫秒），容器多久不活跃后关闭
+      - IDLE_TIMEOUT=${IDLE_TIMEOUT:-1800000}
+      # 最大并发容器数
+      - MAX_CONCURRENT_CONTAINERS=${MAX_CONCURRENT_CONTAINERS:-5}
+
+      # ===== 日志配置 =====
+      # 日志级别：trace, debug, info, warn, error
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+      # ===== 凭据系统配置 =====
+      # 方式一：使用 OneCLI（推荐用于生产环境）
+      # ONECLI_URL=${ONECLI_URL:-}
+
+      # 方式二：直接配置 API（简单部署）
+      # API 基础 URL（支持 Anthropic-compatible API，如阿里云百炼）
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      # API 密钥
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # 或使用 OAuth Token（Claude Pro/Max 订阅）
+      # - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+
+      # ===== 模型配置 =====
+      # 模型名称（支持自定义模型，如阿里云百炼的 glm-5）
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-20250514}
+
+      # ===== 频道配置 =====
+      # Telegram Bot Token（从 @BotFather 获取）
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+
+      # Discord Bot Token（从 Discord Developer Portal 获取）
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+
+      # Slack 配置（需要完整的 Slack App 设置）
+      # - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      # - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+
+      # ===== Apple Container 凭据代理配置 =====
+      # 如果使用 Apple Container 运行时，使用以下配置
+      # - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+
+# 持久化卷定义
+volumes:
+  nanoclaw-store:
+    name: nanoclaw-store
+  nanoclaw-groups:
+    name: nanoclaw-groups
+  nanoclaw-data:
+    name: nanoclaw-data
+  nanoclaw-logs:
+    name: nanoclaw-logs
+  # WhatsApp 认证文件卷（如果使用 WhatsApp，取消下面的注释）
+  # nanoclaw-auth:
+  #   name: nanoclaw-auth

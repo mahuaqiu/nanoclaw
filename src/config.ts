@@ -10,6 +10,9 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
   'TZ',
+  'CLAUDE_MODEL',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_API_KEY',
 ]);
 
 export const ASSISTANT_NAME =
@@ -94,3 +97,13 @@ function resolveConfigTimezone(): string {
   return 'UTC';
 }
 export const TIMEZONE = resolveConfigTimezone();
+
+// Model configuration - supports custom models via CLAUDE_MODEL env var
+// Used for third-party API providers like Alibaba Cloud Bailian (glm-5)
+export const CLAUDE_MODEL = process.env.CLAUDE_MODEL || envConfig.CLAUDE_MODEL;
+
+// API configuration for custom endpoints (Alibaba Cloud Bailian, Together AI, etc.)
+export const ANTHROPIC_BASE_URL =
+  process.env.ANTHROPIC_BASE_URL || envConfig.ANTHROPIC_BASE_URL;
+export const ANTHROPIC_API_KEY =
+  process.env.ANTHROPIC_API_KEY || envConfig.ANTHROPIC_API_KEY;

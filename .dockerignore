@@ -1,0 +1,56 @@
+# NanoClaw Docker 忽略文件
+# 排除不需要复制到镜像的文件
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# 构建产物（会在镜像中重新构建）
+dist/
+
+# 日志文件
+logs/
+
+# 数据和存储（使用卷挂载）
+store/
+groups/
+data/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# 环境变量文件（使用挂载或 docker-compose 配置）
+.env
+.env.local
+.env.*.local
+
+# 测试
+coverage/
+.nyc_output/
+
+# 临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Claude 配置
+.claude/
+
+# 其他
+*.md
+!README.md
+LICENSE
+CONTRIBUTING.md
