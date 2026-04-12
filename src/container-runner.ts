@@ -31,6 +31,8 @@ import {
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
+import { getAssignedSkills } from './db.js';
+import { getGlobalSkill } from './skill-manager.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -205,22 +207,49 @@ function buildVolumeMounts(
     );
   }
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
-  const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
+  // Profile-specific skills directory
+  // Only sync skills that are assigned to this profile
+  const profileSkillsDir = path.join(
+    DATA_DIR,
+    'sessions',
+    group.folder,
+    'profiles',
+    profileId || 'default',
+    '.claude',
+    'skills',
+  );
+
+  // Get assigned skills from database (empty if no profileId)
+  const assignedSkillIds = profileId ? getAssignedSkills(group.jid || '', profileId) : [];
+
+  // Sync only assigned skills to profile directory
+  if (assignedSkillIds.length > 0) {
+    fs.mkdirSync(profileSkillsDir, { recursive: true });
+    fs.chmodSync(profileSkillsDir, 0o777);
+    for (const skillId of assignedSkillIds) {
+      const skill = getGlobalSkill(skillId);
+      if (skill) {
+        const skillDir = path.join(profileSkillsDir, skillId);
+        fs.mkdirSync(skillDir, { recursive: true });
+        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skill.content, 'utf-8');
+      }
     }
   }
+
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
     readonly: false,
   });
+
+  // Mount profile skills (if any assigned)
+  if (assignedSkillIds.length > 0) {
+    mounts.push({
+      hostPath: profileSkillsDir,
+      containerPath: '/home/node/.claude/skills',
+      readonly: false,
+    });
+  }
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
