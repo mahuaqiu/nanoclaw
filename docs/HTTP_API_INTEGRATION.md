@@ -65,8 +65,16 @@ Authorization: Bearer <token>  // 如果配置了 HTTP_API_TOKEN
 | `reply_to_message_id` | string | 可选 | 回复的消息 ID |
 | `reply_to_message_content` | string | 可选 | 回复的消息内容 |
 | `reply_to_sender_name` | string | 可选 | 回复的发送者名称 |
+| `callback_url` | string | 可选 | **回调模式**：NanoClaw 会主动推送 AI 回复到此 URL |
 
-**请求示例**：
+**两种模式**：
+
+| 模式 | 参数 | 说明 |
+|------|------|------|
+| 轮询模式 | 不传 `callback_url` | AI 回复存入 outbox，调用方轮询 `GET /api/outbox/{jid}` 获取 |
+| 回调模式 | 传入 `callback_url` | NanoClaw 处理完成后主动 POST 回复到指定的 URL |
+
+**请求示例（轮询模式）**：
 
 ```json
 {
@@ -416,17 +424,51 @@ def handle_user_message(chat_id, sender_id, sender_name, content):
 
 ---
 
-### 2.2 回调模式（可选）
+### 2.2 回调模式（推荐）
 
-如果对端服务希望 NanoClaw 主动推送回复，需要提供回调接口。
+对端服务在发送消息时提供 `callback_url`，NanoClaw 处理完成后主动推送回复。
 
-**对端服务需要提供的接口**：
+**流程**：
+
+```
+1. 用户发送消息 → 对端服务
+2. 对端服务调用 POST /api/message（带 callback_url 参数）
+3. NanoClaw 开始处理（调用 AI）
+4. NanoClaw 处理完成后，POST 回复到 callback_url
+5. 对端服务收到回复，展示给用户
+```
+
+**发送消息时传入 callback_url**：
+
+```json
+POST /api/message
+{
+  "chat_id": "group-001",
+  "sender": "user-123",
+  "sender_name": "张三",
+  "content": "@Andy 写一个排序算法",
+  "callback_url": "http://your-service:9000/callback/message"
+}
+```
+
+**响应示例**：
+
+```json
+{
+  "status": "ok",
+  "message_id": "1744335600000-abc123",
+  "callback_mode": true,
+  "callback_url": "http://your-service:9000/callback/message"
+}
+```
+
+**对端服务需要提供的回调接口**：
 
 ```
 POST /callback/message
 ```
 
-**请求体（NanoClaw 发送给对端服务）**：
+**NanoClaw 发送给对端服务的请求体**：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -452,13 +494,19 @@ POST /callback/message
 }
 ```
 
-**配置回调 URL**：
+**回调失败处理**：
 
-在 `.env.docker` 中配置：
+如果 callback_url 调用失败（网络错误、超时、非 2xx 响应），NanoClaw 会将回复存入 outbox，调用方仍可通过轮询获取：
 
 ```bash
-HTTP_API_CALLBACK_URL=http://your-service:9000/callback/message
+GET /api/outbox/http:group-001
 ```
+
+**注意事项**：
+- callback_url 必须是完整的 URL（包含协议和端口）
+- 支持 HTTP 和 HTTPS
+- 超时时间：10 秒
+- 回调失败不会阻塞系统，回复仍可在 outbox 中获取
 
 ---
 

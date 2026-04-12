@@ -18,7 +18,10 @@
       "Bash(docker compose:*)",
       "Bash(docker build:*)",
       "Bash(ls:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(docker pull:*)",
+      "Bash(docker tag:*)",
+      "Bash(sudo ls:*)"
     ]
   }
 }

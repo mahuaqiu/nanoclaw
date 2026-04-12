@@ -3,23 +3,31 @@
  * Provides REST API endpoints for external systems to send/receive messages
  *
  * Endpoints:
- *   POST /api/message     - Receive message from external system
- *   GET  /api/outbox/:jid - Get pending outbound messages for a chat
+ *   POST /api/message     - Receive message from external system (supports callback_url)
+ *   GET  /api/outbox/:jid - Get pending outbound messages for a chat (polling mode)
  *   POST /api/register    - Register a new chat group
  *   GET  /api/groups      - List registered groups
  *   GET  /api/health      - Health check
  *   POST /api/clear       - Clear session (reset context)
  *   GET  /api/session/:id - Get session info
+ *
+ * Two modes:
+ *   - Polling: caller fetches replies via GET /api/outbox/:jid
+ *   - Callback: caller provides callback_url in POST /api/message, NanoClaw pushes replies
  */
 
 import http from 'http';
+import https from 'https';
 import url from 'url';
 import { registerChannel, ChannelOpts } from './registry.js';
 import { Channel, NewMessage, RegisteredGroup } from '../types.js';
 import { logger } from '../logger.js';
 
-// Outbound message queue (in-memory, cleared when fetched)
+// Outbound message queue (in-memory, for polling mode)
 const outbox: Map<string, string[]> = new Map();
+
+// Callback URLs per chat (for callback mode)
+const callbackUrls: Map<string, string> = new Map();
 
 // API token for authentication
 let apiToken: string | undefined;
@@ -55,12 +63,104 @@ class HttpApiChannel implements Channel {
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
-    // Add message to outbox for external system to fetch
-    if (!outbox.has(jid)) {
-      outbox.set(jid, []);
+    const chatId = jid.replace('http:', '');
+    const callbackUrl = callbackUrls.get(jid);
+
+    // If callback URL is registered, push the message directly
+    if (callbackUrl) {
+      await this.pushToCallback(callbackUrl, chatId, text);
+    } else {
+      // Otherwise, add to outbox for polling mode
+      if (!outbox.has(jid)) {
+        outbox.set(jid, []);
+      }
+      outbox.get(jid)!.push(text);
+      logger.debug({ channel: this.name, jid, length: text.length }, 'Message added to outbox');
     }
-    outbox.get(jid)!.push(text);
-    logger.debug({ channel: this.name, jid, length: text.length }, 'Message added to outbox');
+  }
+
+  /**
+   * Push message to caller's callback URL
+   */
+  private async pushToCallback(callbackUrl: string, chatId: string, message: string): Promise<void> {
+    const parsedUrl = new URL(callbackUrl);
+    const isHttps = parsedUrl.protocol === 'https:';
+    const client = isHttps ? https : http;
+
+    const payload = JSON.stringify({
+      chat_id: chatId,
+      message: message,
+      timestamp: new Date().toISOString(),
+    });
+
+    const options = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? 443 : 80),
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+      timeout: 10000, // 10 second timeout
+    };
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const req = client.request(options, (res) => {
+          let body = '';
+          const statusCode = res.statusCode || 0;
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => { body += chunk; });
+          res.on('end', () => {
+            if (statusCode >= 200 && statusCode < 300) {
+              logger.info(
+                { channel: this.name, chatId, callbackUrl, status: statusCode },
+                'Callback push succeeded'
+              );
+              resolve();
+            } else {
+              logger.warn(
+                { channel: this.name, chatId, callbackUrl, status: statusCode, body },
+                'Callback push failed with non-2xx status'
+              );
+              reject(new Error(`Callback returned ${statusCode}`));
+            }
+          });
+        });
+
+        req.on('error', (err) => {
+          logger.error(
+            { channel: this.name, chatId, callbackUrl, error: err.message },
+            'Callback push failed'
+          );
+          reject(err);
+        });
+
+        req.on('timeout', () => {
+          req.destroy();
+          logger.error(
+            { channel: this.name, chatId, callbackUrl },
+            'Callback push timeout'
+          );
+          reject(new Error('Callback timeout'));
+        });
+
+        req.write(payload);
+        req.end();
+      });
+    } catch (err) {
+      // Log error but don't throw - message delivery should not block the system
+      logger.error(
+        { channel: this.name, chatId, callbackUrl, error: err instanceof Error ? err.message : String(err) },
+        'Callback push error (message still available in outbox)'
+      );
+      // Fallback: add to outbox so caller can still poll if callback fails
+      if (!outbox.has(`http:${chatId}`)) {
+        outbox.set(`http:${chatId}`, []);
+      }
+      outbox.get(`http:${chatId}`)!.push(message);
+    }
   }
 
   isConnected(): boolean {
@@ -152,6 +252,15 @@ class HttpApiChannel implements Channel {
       // Build JID
       const chatJid = `http:${data.chat_id}`;
 
+      // Register callback URL if provided (for callback mode)
+      if (data.callback_url) {
+        callbackUrls.set(chatJid, data.callback_url);
+        logger.info(
+          { channel: this.name, chat_id: data.chat_id, callback_url: data.callback_url },
+          'Callback URL registered for chat'
+        );
+      }
+
       // Build NewMessage
       const message: NewMessage = {
         id: data.id || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -182,7 +291,12 @@ class HttpApiChannel implements Channel {
       }
 
       res.writeHead(200);
-      res.end(JSON.stringify({ status: 'ok', message_id: message.id }));
+      res.end(JSON.stringify({
+        status: 'ok',
+        message_id: message.id,
+        callback_mode: !!data.callback_url,
+        callback_url: data.callback_url || null,
+      }));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       logger.error({ channel: this.name, error: errorMessage }, 'Failed to process message');
@@ -301,6 +415,9 @@ class HttpApiChannel implements Channel {
       // Clear the session
       this.opts.deleteSession(group.folder);
 
+      // Also clear callback URL
+      callbackUrls.delete(chatJid);
+
       logger.info({ channel: this.name, chat_id: data.chat_id, folder: group.folder }, 'Session cleared');
 
       res.writeHead(200);
@@ -339,6 +456,7 @@ class HttpApiChannel implements Channel {
     }
 
     const sessionId = this.opts.getSession(group.folder);
+    const callbackUrl = callbackUrls.get(chatJid);
 
     res.writeHead(200);
     res.end(JSON.stringify({
@@ -346,7 +464,8 @@ class HttpApiChannel implements Channel {
       jid: chatJid,
       folder: group.folder,
       session_id: sessionId || null,
-      has_session: sessionId !== undefined
+      has_session: sessionId !== undefined,
+      callback_url: callbackUrl || null,
     }));
   }
 
@@ -377,4 +496,4 @@ registerChannel('http-api', (opts: ChannelOpts) => {
 });
 
 // Export for testing
-export { HttpApiChannel, outbox };
+export { HttpApiChannel, outbox, callbackUrls };
