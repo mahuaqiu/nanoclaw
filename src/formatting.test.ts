@@ -241,6 +241,26 @@ describe('getTriggerPattern', () => {
     expect(pattern.test('@C.L.A.U.D.E hello')).toBe(true);
     expect(pattern.test('@CXLXAUXDXE hello')).toBe(false);
   });
+
+  it('supports Chinese characters in triggers', () => {
+    const pattern = getTriggerPattern('@小威');
+
+    // 中文 trigger 后面有空格
+    expect(pattern.test('@小威 在吗')).toBe(true);
+    // 中文 trigger 在字符串结尾
+    expect(pattern.test('@小威')).toBe(true);
+    // 中文 trigger 后面有标点符号
+    expect(pattern.test('@小威，你好')).toBe(true);
+    // 不应该匹配 trigger 被嵌入在其他文字中
+    expect(pattern.test('@小威威你好')).toBe(false);
+  });
+
+  it('supports mixed ASCII and Chinese triggers', () => {
+    const pattern = getTriggerPattern('@xiaoma');
+
+    expect(pattern.test('@xiaoma 你好')).toBe(true);
+    expect(pattern.test('@xiaoma123')).toBe(false);
+  });
 });
 
 // --- Outbound formatting (internal tag stripping + prefix) ---

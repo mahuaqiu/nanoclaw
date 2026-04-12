@@ -39,6 +39,7 @@ import {
   assignSkill,
   removeSkillAssignment,
   setRegisteredGroup,
+  deleteRegisteredGroup,
 } from '../db.js';
 import {
   listGlobalSkills,
@@ -243,6 +244,8 @@ class HttpApiChannel implements Channel {
       this.handleListGroups(res);
     } else if (pathname?.match(/^\/api\/groups\/[^/]+$/) && method === 'PUT') {
       this.handleUpdateGroup(pathname, req, res);
+    } else if (pathname?.match(/^\/api\/groups\/[^/]+$/) && method === 'DELETE') {
+      this.handleDeleteGroup(pathname, res);
     } else if (pathname?.match(/^\/api\/groups\/[^/]+$/) && method === 'GET') {
       this.handleGetGroup(pathname, res);
     } else if (pathname === '/api/clear' && method === 'POST') {
@@ -335,19 +338,17 @@ class HttpApiChannel implements Channel {
         reply_to_sender_name: data.reply_to_sender_name,
       };
 
-      // Call onMessage callback
-      this.opts.onMessage(chatJid, message);
+      // Report chat metadata first (ensures chats table has record for FK constraint)
+      this.opts.onChatMetadata(
+        chatJid,
+        message.timestamp,
+        data.chat_name || null,
+        this.name,
+        data.is_group || false,
+      );
 
-      // Report chat metadata if provided
-      if (data.chat_name) {
-        this.opts.onChatMetadata(
-          chatJid,
-          message.timestamp,
-          data.chat_name,
-          this.name,
-          data.is_group || false,
-        );
-      }
+      // Call onMessage callback (will store message, needs chats record to exist)
+      this.opts.onMessage(chatJid, message);
 
       res.writeHead(200);
       res.end(JSON.stringify({
@@ -638,6 +639,44 @@ class HttpApiChannel implements Channel {
       res.writeHead(500);
       res.end(JSON.stringify({ error: errorMessage }));
     }
+  }
+
+  private handleDeleteGroup(pathname: string, res: http.ServerResponse): void {
+    const jid = pathname.replace('/api/groups/', '');
+
+    const groups = this.opts.registeredGroups();
+    const existingGroup = groups[jid];
+
+    if (!existingGroup) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'Group not found', jid }));
+      return;
+    }
+
+    // 不允许删除主群组
+    if (existingGroup.isMain) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: 'Cannot delete main group', jid }));
+      return;
+    }
+
+    // 删除群组
+    const result = deleteRegisteredGroup(jid);
+
+    if (!result) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: 'Failed to delete group', jid }));
+      return;
+    }
+
+    logger.info({ channel: this.name, jid, folder: result.folder }, 'Group deleted');
+
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      status: 'ok',
+      jid,
+      folder: result.folder,
+    }));
   }
 
   private async handleClearSession(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

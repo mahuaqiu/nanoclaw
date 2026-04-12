@@ -71,7 +71,16 @@ function escapeRegex(str: string): string {
 }
 
 export function buildTriggerPattern(trigger: string): RegExp {
-  return new RegExp(`^${escapeRegex(trigger.trim())}\\b`, 'i');
+  // 使用前瞻断言替代 \b，以支持中文 trigger
+  // \b 对于中文字符不工作，因为中文字符被认为是"非单词字符"
+  //
+  // 边界定义：
+  // - \s: 空白字符（空格、换行等）
+  // - $: 字符串结尾
+  // - [^\w\u4E00-\u9FFF]: 既不是单词字符（字母、数字、下划线）也不是汉字
+  //   汉字被视为"延续字符"（类似英文字母），防止 @小威 匹配 @小威威
+  //   中文标点（如 ，。！？）被视为边界字符，允许匹配
+  return new RegExp(`^${escapeRegex(trigger.trim())}(?=\\s|$|[^\\w\\u4E00-\\u9FFF])`, 'i');
 }
 
 export const DEFAULT_TRIGGER = `@${ASSISTANT_NAME}`;

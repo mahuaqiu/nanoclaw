@@ -809,6 +809,29 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
   return result;
 }
 
+/**
+ * Delete a registered group and all its profiles
+ */
+export function deleteRegisteredGroup(jid: string): { folder: string } | null {
+  // 先获取 folder 用于删除 session
+  const row = db.prepare('SELECT folder FROM registered_groups WHERE jid = ?').get(jid) as
+    { folder: string } | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  const folder = row.folder;
+
+  // 删除群组记录（agent_profiles 会通过外键自动删除）
+  db.prepare('DELETE FROM registered_groups WHERE jid = ?').run(jid);
+
+  // 删除 session 记录
+  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(folder);
+
+  return { folder };
+}
+
 // --- Agent Profile accessors ---
 
 /**
