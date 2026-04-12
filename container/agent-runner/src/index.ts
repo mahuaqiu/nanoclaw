@@ -60,9 +60,27 @@ interface SDKUserMessage {
   session_id: string;
 }
 
-const IPC_INPUT_DIR = '/workspace/ipc/input';
-const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
+const IPC_INPUT_DIR_BASE = '/workspace/ipc/input';
 const IPC_POLL_MS = 500;
+
+// Global IPC directory (set after reading containerInput)
+let IPC_INPUT_DIR = IPC_INPUT_DIR_BASE;
+
+// In Docker-in-Docker mode, IPC is inherited via volumes-from at /app/data/ipc/{group}/
+// We need to use the correct path based on what's available
+function resolveIpcDir(groupFolder: string): string {
+  const inheritedIpcDir = `/app/data/ipc/${groupFolder}/input`;
+  if (fs.existsSync(inheritedIpcDir)) {
+    log(`Using inherited IPC path: ${inheritedIpcDir}`);
+    return inheritedIpcDir;
+  }
+  log(`Using base IPC path: ${IPC_INPUT_DIR_BASE}`);
+  return IPC_INPUT_DIR_BASE;
+}
+
+function getCloseSentinelPath(): string {
+  return path.join(IPC_INPUT_DIR, '_close');
+}
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -293,9 +311,10 @@ function formatTranscriptMarkdown(
  * Check for _close sentinel.
  */
 function shouldClose(): boolean {
-  if (fs.existsSync(IPC_INPUT_CLOSE_SENTINEL)) {
+  const sentinelPath = getCloseSentinelPath();
+  if (fs.existsSync(sentinelPath)) {
     try {
-      fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL);
+      fs.unlinkSync(sentinelPath);
     } catch {
       /* ignore */
     }
@@ -622,6 +641,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Resolve IPC directory based on Docker-in-Docker mode
+  IPC_INPUT_DIR = resolveIpcDir(containerInput.groupFolder);
+
   // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = {
@@ -640,7 +662,7 @@ async function main(): Promise<void> {
 
   // Clean up stale _close sentinel from previous container runs
   try {
-    fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL);
+    fs.unlinkSync(getCloseSentinelPath());
   } catch {
     /* ignore */
   }

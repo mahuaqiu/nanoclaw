@@ -5,7 +5,20 @@
       "Bash(npm run:*)",
       "Bash(npm install:*)",
       "Bash(./container/build.sh)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker run:*)",
+      "Bash(docker image:*)",
+      "Bash(docker create:*)",
+      "Bash(docker cp:*)",
+      "Bash(docker rm:*)",
+      "Bash(docker export:*)",
+      "Bash(tar -tf -)",
+      "Bash(docker volume:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker build:*)",
+      "Bash(ls:*)",
+      "Bash(curl:*)"
     ]
   }
 }

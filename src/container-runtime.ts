@@ -3,6 +3,7 @@
  * All runtime-specific logic lives here so swapping runtimes means changing one file.
  */
 import { execSync } from 'child_process';
+import fs from 'fs';
 import os from 'os';
 
 import { logger } from './logger.js';
@@ -17,6 +18,31 @@ export function hostGatewayArgs(): string[] {
     return ['--add-host=host.docker.internal:host-gateway'];
   }
   return [];
+}
+
+/**
+ * Check if running inside a Docker container.
+ * Used to determine if agent containers need volumes-from for path access.
+ */
+export function isRunningInDocker(): boolean {
+  // Check for /.dockerenv file or cgroup containing "docker"
+  try {
+    if (fs.existsSync('/.dockerenv')) return true;
+    const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf-8');
+    return cgroup.includes('docker');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * CLI args for inheriting volumes from the main container.
+ * Required for Docker-in-Docker scenarios where paths are in named volumes.
+ */
+export function volumesFromArgs(): string[] {
+  if (!isRunningInDocker()) return [];
+  // Main container name is hardcoded in docker-compose.yaml
+  return ['--volumes-from', 'nanoclaw'];
 }
 
 /** Returns CLI args for a readonly bind mount. */

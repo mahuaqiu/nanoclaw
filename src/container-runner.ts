@@ -24,6 +24,7 @@ import { logger } from './logger.js';
 import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
+  volumesFromArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
@@ -146,6 +147,8 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+  // Set permissions to allow agent container (running as node user) to write
+  fs.chmodSync(groupSessionsDir, 0o777);
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -193,6 +196,11 @@ function buildVolumeMounts(
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  // Set permissions to allow agent container (running as node user) to write
+  fs.chmodSync(groupIpcDir, 0o777);
+  fs.chmodSync(path.join(groupIpcDir, 'messages'), 0o777);
+  fs.chmodSync(path.join(groupIpcDir, 'tasks'), 0o777);
+  fs.chmodSync(path.join(groupIpcDir, 'input'), 0o777);
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
@@ -286,6 +294,10 @@ async function buildContainerArgs(
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
+
+  // In Docker-in-Docker scenarios, inherit volumes from main container
+  // so agent can access paths in named volumes (groups, data, sessions)
+  args.push(...volumesFromArgs());
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),

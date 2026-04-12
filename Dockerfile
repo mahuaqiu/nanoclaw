@@ -1,7 +1,10 @@
 # NanoClaw 主应用 Docker 镜像
 # 用于运行 NanoClaw 服务，通过 Docker socket 启动 agent 容器
 
-FROM node:22-slim
+FROM node:22-alpine
+
+# 配置 Alpine 国内镜像源（阿里云）
+RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
 
 # 安装构建工具（用于编译 better-sqlite3 原生模块）
 # 安装 Docker CLI（用于在容器内构建和运行 agent 容器）
@@ -21,8 +24,8 @@ WORKDIR /app
 # 复制 package 文件（利用 Docker 缓存）
 COPY package.json package-lock.json* ./
 
-# 安装依赖（需要 --unsafe-perm 用于原生模块编译）
-RUN npm ci --unsafe-perm
+# 安装依赖（使用国内 npm 镜像）
+RUN npm config set registry https://registry.npmmirror.com && npm ci --unsafe-perm
 
 # 复制项目文件
 COPY . .
