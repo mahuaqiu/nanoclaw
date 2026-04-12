@@ -5,6 +5,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 
 import {
   ASSISTANT_NAME,
+  DATA_DIR,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
@@ -47,7 +48,11 @@ import {
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
-import { resolveGroupFolderPath } from './group-folder.js';
+import {
+  resolveGroupFolderPath,
+  resolveProfileIpcPath,
+  resolveProfileSessionPath,
+} from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
@@ -151,6 +156,54 @@ function findMatchingProfile(
   }
 
   return undefined;
+}
+
+/**
+ * 将回复同步给其他 profile（旁观者记录）
+ * 写入其他活跃 profile 的 IPC 目录，以便下次启动时能看到
+ */
+function syncReplyToObservers(
+  group: RegisteredGroup,
+  replyingProfile: AgentProfile,
+  replyText: string,
+  originalMessages: NewMessage[],
+): void {
+  const profiles = group.profiles ?? [];
+  if (profiles.length <= 1) return; // 没有其他 profile，无需同步
+
+  for (const profile of profiles) {
+    if (profile.id === replyingProfile.id || profile.isActive === false) continue;
+
+    // 写入其他 profile 的 IPC 目录作为 observer_reply
+    const ipcPath = resolveProfileIpcPath(group.folder, profile.id);
+    const inputDir = path.join(ipcPath, 'input');
+    try {
+      fs.mkdirSync(inputDir, { recursive: true });
+      const filename = `${Date.now()}-observer-${Math.random().toString(36).slice(2, 6)}.json`;
+      const filepath = path.join(inputDir, filename);
+      const tempPath = `${filepath}.tmp`;
+
+      const observerReply = {
+        type: 'observer_reply',
+        replyProfileId: replyingProfile.id,
+        replyProfileName: replyingProfile.name,
+        replyText: replyText,
+        timestamp: new Date().toISOString(),
+      };
+
+      fs.writeFileSync(tempPath, JSON.stringify(observerReply));
+      fs.renameSync(tempPath, filepath);
+      logger.debug(
+        { group: group.folder, from: replyingProfile.id, to: profile.id },
+        'Synced reply to observer profile IPC',
+      );
+    } catch (err) {
+      logger.warn(
+        { group: group.folder, toProfile: profile.id, err },
+        'Failed to sync reply to observer',
+      );
+    }
+  }
 }
 
 function loadState(): void {
@@ -362,6 +415,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           triggerWord: matchedProfile?.trigger,
         });
         outputSentToUser = true;
+
+        // 同步回复给其他 profile（旁观者记录）
+        if (matchedProfile) {
+          syncReplyToObservers(group, matchedProfile, text, missedMessages);
+        }
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();

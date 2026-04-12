@@ -95,14 +95,25 @@ const IPC_POLL_MS = 500;
 let IPC_INPUT_DIR = IPC_INPUT_DIR_BASE;
 
 // In Docker-in-Docker mode, IPC is inherited via volumes-from at /app/data/ipc/{group}/
+// But with multi-profile support, IPC is mounted directly at /workspace/ipc (profile-specific)
 // We need to use the correct path based on what's available
-function resolveIpcDir(groupFolder: string): string {
+function resolveIpcDir(groupFolder: string, profileId?: string): string {
+  // First check if the base IPC directory exists (profile-specific mount)
+  // This is the preferred path for multi-profile support
+  if (fs.existsSync(IPC_INPUT_DIR_BASE)) {
+    log(`Using base IPC path: ${IPC_INPUT_DIR_BASE}`);
+    return IPC_INPUT_DIR_BASE;
+  }
+
+  // Fallback: check inherited IPC path (Docker-in-Docker without profile)
   const inheritedIpcDir = `/app/data/ipc/${groupFolder}/input`;
   if (fs.existsSync(inheritedIpcDir)) {
     log(`Using inherited IPC path: ${inheritedIpcDir}`);
     return inheritedIpcDir;
   }
-  log(`Using base IPC path: ${IPC_INPUT_DIR_BASE}`);
+
+  // Default: use base path (will be created if needed)
+  log(`Using default IPC path: ${IPC_INPUT_DIR_BASE}`);
   return IPC_INPUT_DIR_BASE;
 }
 
