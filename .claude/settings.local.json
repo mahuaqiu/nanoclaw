@@ -32,7 +32,8 @@
       "Bash(tail:*)",
       "Bash(tar -xO)",
       "Bash(onecli version:*)",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

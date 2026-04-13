@@ -102,7 +102,10 @@ export class GroupQueue {
     }
 
     this.runForGroup(groupJid, 'messages', profileId).catch((err) =>
-      logger.error({ groupJid, profileId, err }, 'Unhandled error in runForGroup'),
+      logger.error(
+        { groupJid, profileId, err },
+        'Unhandled error in runForGroup',
+      ),
     );
   }
 
@@ -118,11 +121,17 @@ export class GroupQueue {
 
     // Prevent double-queuing: check both pending and currently-running task
     if (state.runningTaskId === taskId) {
-      logger.debug({ groupJid, taskId, profileId }, 'Task already running, skipping');
+      logger.debug(
+        { groupJid, taskId, profileId },
+        'Task already running, skipping',
+      );
       return;
     }
     if (state.pendingTasks.some((t) => t.id === taskId)) {
-      logger.debug({ groupJid, taskId, profileId }, 'Task already queued, skipping');
+      logger.debug(
+        { groupJid, taskId, profileId },
+        'Task already queued, skipping',
+      );
       return;
     }
 
@@ -131,7 +140,10 @@ export class GroupQueue {
       if (state.idleWaiting) {
         this.closeStdin(groupJid, profileId);
       }
-      logger.debug({ groupJid, taskId, profileId }, 'Container active, task queued');
+      logger.debug(
+        { groupJid, taskId, profileId },
+        'Container active, task queued',
+      );
       return;
     }
 
@@ -159,7 +171,10 @@ export class GroupQueue {
       },
       profileId,
     ).catch((err) =>
-      logger.error({ groupJid, taskId, profileId, err }, 'Unhandled error in runTask'),
+      logger.error(
+        { groupJid, taskId, profileId, err },
+        'Unhandled error in runTask',
+      ),
     );
   }
 
@@ -200,7 +215,10 @@ export class GroupQueue {
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
     // 使用 profile 专属的 IPC 目录
-    const ipcDir = resolveProfileIpcPath(state.groupFolder, state.profileId || 'default');
+    const ipcDir = resolveProfileIpcPath(
+      state.groupFolder,
+      state.profileId || 'default',
+    );
     const inputDir = path.join(ipcDir, 'input');
     try {
       fs.mkdirSync(inputDir, { recursive: true });
@@ -223,7 +241,10 @@ export class GroupQueue {
     if (!state.active || !state.groupFolder) return;
 
     // 使用 profile 专属的 IPC 目录
-    const ipcDir = resolveProfileIpcPath(state.groupFolder, state.profileId || 'default');
+    const ipcDir = resolveProfileIpcPath(
+      state.groupFolder,
+      state.profileId || 'default',
+    );
     const inputDir = path.join(ipcDir, 'input');
     try {
       fs.mkdirSync(inputDir, { recursive: true });
@@ -261,7 +282,10 @@ export class GroupQueue {
         }
       }
     } catch (err) {
-      logger.error({ groupJid, profileId, err }, 'Error processing messages for group');
+      logger.error(
+        { groupJid, profileId, err },
+        'Error processing messages for group',
+      );
       this.scheduleRetry(groupJid, state, profileId);
     } finally {
       state.active = false;
@@ -295,7 +319,10 @@ export class GroupQueue {
     try {
       await task.fn();
     } catch (err) {
-      logger.error({ groupJid, taskId: task.id, profileId, err }, 'Error running task');
+      logger.error(
+        { groupJid, taskId: task.id, profileId, err },
+        'Error running task',
+      );
     } finally {
       state.active = false;
       state.isTaskContainer = false;
@@ -309,7 +336,11 @@ export class GroupQueue {
     }
   }
 
-  private scheduleRetry(groupJid: string, state: GroupState, profileId?: string): void {
+  private scheduleRetry(
+    groupJid: string,
+    state: GroupState,
+    profileId?: string,
+  ): void {
     state.retryCount++;
     if (state.retryCount > MAX_RETRIES) {
       logger.error(
@@ -351,11 +382,12 @@ export class GroupQueue {
 
     // Then pending messages
     if (state.pendingMessages) {
-      this.runForGroup(groupJid, 'drain', state.pendingMessagesProfile).catch((err) =>
-        logger.error(
-          { groupJid, profileId: state.pendingMessagesProfile, err },
-          'Unhandled error in runForGroup (drain)',
-        ),
+      this.runForGroup(groupJid, 'drain', state.pendingMessagesProfile).catch(
+        (err) =>
+          logger.error(
+            { groupJid, profileId: state.pendingMessagesProfile, err },
+            'Unhandled error in runForGroup (drain)',
+          ),
       );
       return;
     }
@@ -372,7 +404,10 @@ export class GroupQueue {
       const key = this.waitingGroups.shift()!;
       // 解析复合键
       const [groupJid, profileId] = key.split(':');
-      const state = this.getGroup(groupJid, profileId === 'undefined' ? undefined : profileId);
+      const state = this.getGroup(
+        groupJid,
+        profileId === 'undefined' ? undefined : profileId,
+      );
 
       // Prioritize tasks over messages
       if (state.pendingTasks.length > 0) {
@@ -384,11 +419,12 @@ export class GroupQueue {
           ),
         );
       } else if (state.pendingMessages) {
-        this.runForGroup(groupJid, 'drain', state.pendingMessagesProfile).catch((err) =>
-          logger.error(
-            { groupJid, profileId: state.pendingMessagesProfile, err },
-            'Unhandled error in runForGroup (waiting)',
-          ),
+        this.runForGroup(groupJid, 'drain', state.pendingMessagesProfile).catch(
+          (err) =>
+            logger.error(
+              { groupJid, profileId: state.pendingMessagesProfile, err },
+              'Unhandled error in runForGroup (waiting)',
+            ),
         );
       }
       // If neither pending, skip this group profile

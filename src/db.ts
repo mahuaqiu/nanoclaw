@@ -625,7 +625,9 @@ export function getSession(
   profileId: string = DEFAULT_PROFILE_ID,
 ): string | undefined {
   const row = db
-    .prepare('SELECT session_id FROM sessions WHERE group_folder = ? AND profile_id = ?')
+    .prepare(
+      'SELECT session_id FROM sessions WHERE group_folder = ? AND profile_id = ?',
+    )
     .get(groupFolder, profileId) as { session_id: string } | undefined;
   return row?.session_id;
 }
@@ -653,7 +655,9 @@ export function setSession(
  */
 export function deleteSession(groupFolder: string, profileId?: string): void {
   if (profileId) {
-    db.prepare('DELETE FROM sessions WHERE group_folder = ? AND profile_id = ?').run(groupFolder, profileId);
+    db.prepare(
+      'DELETE FROM sessions WHERE group_folder = ? AND profile_id = ?',
+    ).run(groupFolder, profileId);
   } else {
     db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
   }
@@ -666,7 +670,11 @@ export function deleteSession(groupFolder: string, profileId?: string): void {
 export function getAllSessions(): Record<string, Record<string, string>> {
   const rows = db
     .prepare('SELECT group_folder, profile_id, session_id FROM sessions')
-    .all() as Array<{ group_folder: string; profile_id: string; session_id: string }>;
+    .all() as Array<{
+    group_folder: string;
+    profile_id: string;
+    session_id: string;
+  }>;
   const result: Record<string, Record<string, string>> = {};
   for (const row of rows) {
     if (!result[row.group_folder]) {
@@ -684,7 +692,9 @@ export function getAllSessions(): Record<string, Record<string, string>> {
  */
 export function getGroupSessions(groupFolder: string): Record<string, string> {
   const rows = db
-    .prepare('SELECT profile_id, session_id FROM sessions WHERE group_folder = ?')
+    .prepare(
+      'SELECT profile_id, session_id FROM sessions WHERE group_folder = ?',
+    )
     .all(groupFolder) as Array<{ profile_id: string; session_id: string }>;
   const result: Record<string, string> = {};
   for (const row of rows) {
@@ -695,9 +705,7 @@ export function getGroupSessions(groupFolder: string): Record<string, string> {
 
 // --- Registered group accessors ---
 
-export function getRegisteredGroup(
-  jid: string,
-): RegisteredGroup | undefined {
+export function getRegisteredGroup(jid: string): RegisteredGroup | undefined {
   const row = db
     .prepare('SELECT * FROM registered_groups WHERE jid = ?')
     .get(jid) as
@@ -776,7 +784,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
   const name = firstProfile?.name ?? group.name ?? 'Unknown';
   const trigger = firstProfile?.trigger ?? group.trigger ?? '';
   const addedAt = group.addedAt ?? group.added_at ?? new Date().toISOString();
-  const containerConfig = firstProfile?.containerConfig ?? group.containerConfig;
+  const containerConfig =
+    firstProfile?.containerConfig ?? group.containerConfig;
 
   db.prepare(
     `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, default_profile)
@@ -874,8 +883,9 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
  */
 export function deleteRegisteredGroup(jid: string): { folder: string } | null {
   // 先获取 folder 用于删除 session
-  const row = db.prepare('SELECT folder FROM registered_groups WHERE jid = ?').get(jid) as
-    { folder: string } | undefined;
+  const row = db
+    .prepare('SELECT folder FROM registered_groups WHERE jid = ?')
+    .get(jid) as { folder: string } | undefined;
 
   if (!row) {
     return null;
@@ -901,15 +911,15 @@ export function getProfiles(jid: string): AgentProfile[] {
   const rows = db
     .prepare('SELECT * FROM agent_profiles WHERE jid = ? ORDER BY added_at')
     .all(jid) as Array<{
-      id: string;
-      jid: string;
-      name: string;
-      trigger: string;
-      description: string | null;
-      container_config: string | null;
-      is_active: number;
-      added_at: string;
-    }>;
+    id: string;
+    jid: string;
+    name: string;
+    trigger: string;
+    description: string | null;
+    container_config: string | null;
+    is_active: number;
+    added_at: string;
+  }>;
 
   return rows.map((row) => ({
     id: row.id,
@@ -927,7 +937,10 @@ export function getProfiles(jid: string): AgentProfile[] {
 /**
  * Get a specific profile by ID
  */
-export function getProfile(jid: string, profileId: string): AgentProfile | undefined {
+export function getProfile(
+  jid: string,
+  profileId: string,
+): AgentProfile | undefined {
   const row = db
     .prepare('SELECT * FROM agent_profiles WHERE jid = ? AND id = ?')
     .get(jid, profileId) as
@@ -1008,9 +1021,7 @@ export function updateProfile(
   if (updates.containerConfig !== undefined) {
     fields.push('container_config = ?');
     values.push(
-      updates.containerConfig
-        ? JSON.stringify(updates.containerConfig)
-        : null,
+      updates.containerConfig ? JSON.stringify(updates.containerConfig) : null,
     );
   }
   if (updates.isActive !== undefined) {
@@ -1069,7 +1080,9 @@ function migrateLegacyGroupsToProfiles(database: Database.Database): void {
   }
 
   // Get all existing registered_groups
-  const groups = database.prepare('SELECT * FROM registered_groups').all() as Array<{
+  const groups = database
+    .prepare('SELECT * FROM registered_groups')
+    .all() as Array<{
     jid: string;
     name: string;
     folder: string;
@@ -1112,9 +1125,7 @@ function migrateLegacyGroupsToProfiles(database: Database.Database): void {
 
     // Set default_profile to this profile
     database
-      .prepare(
-        'UPDATE registered_groups SET default_profile = ? WHERE jid = ?',
-      )
+      .prepare('UPDATE registered_groups SET default_profile = ? WHERE jid = ?')
       .run(profileId, group.jid);
 
     logger.info(
@@ -1161,7 +1172,9 @@ function migrateSessionsToMultiProfile(database: Database.Database): void {
   database.exec('ALTER TABLE sessions_new RENAME TO sessions');
 
   // Create index
-  database.exec('CREATE INDEX IF NOT EXISTS idx_sessions_folder ON sessions(group_folder)');
+  database.exec(
+    'CREATE INDEX IF NOT EXISTS idx_sessions_folder ON sessions(group_folder)',
+  );
 
   logger.info('Sessions table migration completed');
 }
@@ -1173,7 +1186,9 @@ function migrateSessionsToMultiProfile(database: Database.Database): void {
  */
 export function getAssignedSkills(jid: string, profileId: string): string[] {
   const rows = db
-    .prepare('SELECT skill_id FROM profile_skills WHERE jid = ? AND profile_id = ? ORDER BY assigned_at')
+    .prepare(
+      'SELECT skill_id FROM profile_skills WHERE jid = ? AND profile_id = ? ORDER BY assigned_at',
+    )
     .all(jid, profileId) as Array<{ skill_id: string }>;
   return rows.map((row) => row.skill_id);
 }
@@ -1181,9 +1196,15 @@ export function getAssignedSkills(jid: string, profileId: string): string[] {
 /**
  * Check if a skill is assigned to a profile
  */
-export function isSkillAssigned(jid: string, profileId: string, skillId: string): boolean {
+export function isSkillAssigned(
+  jid: string,
+  profileId: string,
+  skillId: string,
+): boolean {
   const row = db
-    .prepare('SELECT 1 FROM profile_skills WHERE jid = ? AND profile_id = ? AND skill_id = ?')
+    .prepare(
+      'SELECT 1 FROM profile_skills WHERE jid = ? AND profile_id = ? AND skill_id = ?',
+    )
     .get(jid, profileId, skillId) as { 1: number } | undefined;
   return !!row;
 }
@@ -1191,7 +1212,11 @@ export function isSkillAssigned(jid: string, profileId: string, skillId: string)
 /**
  * Assign a skill to a profile
  */
-export function assignSkill(jid: string, profileId: string, skillId: string): void {
+export function assignSkill(
+  jid: string,
+  profileId: string,
+  skillId: string,
+): void {
   db.prepare(
     'INSERT INTO profile_skills (jid, profile_id, skill_id, assigned_at) VALUES (?, ?, ?, ?)',
   ).run(jid, profileId, skillId, new Date().toISOString());
@@ -1200,7 +1225,11 @@ export function assignSkill(jid: string, profileId: string, skillId: string): vo
 /**
  * Remove a skill from a profile
  */
-export function removeSkillAssignment(jid: string, profileId: string, skillId: string): void {
+export function removeSkillAssignment(
+  jid: string,
+  profileId: string,
+  skillId: string,
+): void {
   db.prepare(
     'DELETE FROM profile_skills WHERE jid = ? AND profile_id = ? AND skill_id = ?',
   ).run(jid, profileId, skillId);

@@ -70,7 +70,10 @@ export function assertValidProfileId(profileId: string): void {
  * 解析 profile 专属的 IPC 目录路径
  * 格式: DATA_DIR/ipc/{folder}/profiles/{profileId}/
  */
-export function resolveProfileIpcPath(folder: string, profileId: string): string {
+export function resolveProfileIpcPath(
+  folder: string,
+  profileId: string,
+): string {
   assertValidGroupFolder(folder);
   assertValidProfileId(profileId);
   const ipcBaseDir = path.resolve(DATA_DIR, 'ipc');
@@ -83,11 +86,20 @@ export function resolveProfileIpcPath(folder: string, profileId: string): string
  * 解析 profile 专属的 Session 目录路径
  * 格式: DATA_DIR/sessions/{folder}/profiles/{profileId}/.claude/
  */
-export function resolveProfileSessionPath(folder: string, profileId: string): string {
+export function resolveProfileSessionPath(
+  folder: string,
+  profileId: string,
+): string {
   assertValidGroupFolder(folder);
   assertValidProfileId(profileId);
   const sessionBaseDir = path.resolve(DATA_DIR, 'sessions');
-  const sessionPath = path.resolve(sessionBaseDir, folder, 'profiles', profileId, '.claude');
+  const sessionPath = path.resolve(
+    sessionBaseDir,
+    folder,
+    'profiles',
+    profileId,
+    '.claude',
+  );
   ensureWithinBase(sessionBaseDir, sessionPath);
   return sessionPath;
 }
@@ -96,7 +108,10 @@ export function resolveProfileSessionPath(folder: string, profileId: string): st
  * 解析 profile 专属的工作目录路径（用于 CLAUDE.md 等）
  * 格式: GROUPS_DIR/{folder}/profiles/{profileId}/
  */
-export function resolveProfileFolderPath(folder: string, profileId: string): string {
+export function resolveProfileFolderPath(
+  folder: string,
+  profileId: string,
+): string {
   assertValidGroupFolder(folder);
   assertValidProfileId(profileId);
   const profilePath = path.resolve(GROUPS_DIR, folder, 'profiles', profileId);

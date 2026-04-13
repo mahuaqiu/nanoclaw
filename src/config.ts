@@ -78,7 +78,10 @@ export function buildTriggerPattern(trigger: string): RegExp {
   // - [^\w\u4E00-\u9FFF]: 既不是单词字符（字母、数字、下划线）也不是汉字
   //   汉字被视为"延续字符"（类似英文字母），防止 @小威 匹配 @小威威
   //   中文标点（如 ，。！？）被视为边界字符，允许匹配
-  return new RegExp(`^${escapeRegex(trigger.trim())}(?=\\s|$|[^\\w\\u4E00-\\u9FFF])`, 'i');
+  return new RegExp(
+    `^${escapeRegex(trigger.trim())}(?=\\s|$|[^\\w\\u4E00-\\u9FFF])`,
+    'i',
+  );
 }
 
 export const DEFAULT_TRIGGER = `@${ASSISTANT_NAME}`;

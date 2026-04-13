@@ -196,7 +196,8 @@ function syncReplyToObservers(
   if (profiles.length <= 1) return; // 没有其他 profile，无需同步
 
   for (const profile of profiles) {
-    if (profile.id === replyingProfile.id || profile.isActive === false) continue;
+    if (profile.id === replyingProfile.id || profile.isActive === false)
+      continue;
 
     // 写入其他 profile 的 IPC 目录作为 observer_reply
     const ipcPath = resolveProfileIpcPath(group.folder, profile.id);
@@ -388,7 +389,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // 广播原始消息到所有 profile 的 IPC 目录
   // 这样其他 profile 可以看到对话历史，即使没有被 @
   if (!isMainGroup && group.profiles && group.profiles.length > 1) {
-    broadcastMessageToProfiles(group, missedMessages, matchedProfile?.id ?? null);
+    broadcastMessageToProfiles(
+      group,
+      missedMessages,
+      matchedProfile?.id ?? null,
+    );
   }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
@@ -400,7 +405,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const groupName = matchedProfile?.name ?? group.name ?? group.folder;
   logger.info(
-    { group: groupName, profile: matchedProfile?.id, messageCount: missedMessages.length },
+    {
+      group: groupName,
+      profile: matchedProfile?.id,
+      messageCount: missedMessages.length,
+    },
     'Processing messages',
   );
 
@@ -423,43 +432,49 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, matchedProfile, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      const groupName = matchedProfile?.name ?? group.name ?? group.folder;
-      logger.info({ group: groupName }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        // 传递 profile 信息，让对端服务知道是哪个角色回复
-        await channel.sendMessage(chatJid, text, {
-          profileId: matchedProfile?.id,
-          profileName: matchedProfile?.name,
-          triggerWord: matchedProfile?.trigger,
-        });
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    matchedProfile,
+    prompt,
+    chatJid,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        const groupName = matchedProfile?.name ?? group.name ?? group.folder;
+        logger.info({ group: groupName }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          // 传递 profile 信息，让对端服务知道是哪个角色回复
+          await channel.sendMessage(chatJid, text, {
+            profileId: matchedProfile?.id,
+            profileName: matchedProfile?.name,
+            triggerWord: matchedProfile?.trigger,
+          });
+          outputSentToUser = true;
 
-        // 同步回复给其他 profile（旁观者记录）
-        if (matchedProfile) {
-          syncReplyToObservers(group, matchedProfile, text, missedMessages);
+          // 同步回复给其他 profile（旁观者记录）
+          if (matchedProfile) {
+            syncReplyToObservers(group, matchedProfile, text, missedMessages);
+          }
         }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid, profileId);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid, profileId);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -835,7 +850,10 @@ async function main(): Promise<void> {
     registerGroup: (jid: string, group: RegisteredGroup) => {
       setRegisteredGroup(jid, group);
       registeredGroups = getAllRegisteredGroups();
-      logger.info({ jid, folder: group.folder, isMain: group.isMain }, 'Group registered via channel API');
+      logger.info(
+        { jid, folder: group.folder, isMain: group.isMain },
+        'Group registered via channel API',
+      );
     },
     // Session management for HTTP API channel
     deleteSession: (groupFolder: string, profileId?: string) => {

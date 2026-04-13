@@ -108,15 +108,19 @@ export interface TaskRunLog {
 // --- Channel abstraction ---
 
 export interface SendMessageOptions {
-  profileId?: string;     // Profile ID (如 "xiaoma", "小威")
-  profileName?: string;   // Profile 显示名称
-  triggerWord?: string;   // 匹配的触发词
+  profileId?: string; // Profile ID (如 "xiaoma", "小威")
+  profileName?: string; // Profile 显示名称
+  triggerWord?: string; // 匹配的触发词
 }
 
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string, options?: SendMessageOptions): Promise<void>;
+  sendMessage(
+    jid: string,
+    text: string,
+    options?: SendMessageOptions,
+  ): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;

@@ -30,7 +30,11 @@ export interface SkillDetail extends SkillInfo {
  */
 function isValidSkillId(skillId: string): boolean {
   // 禁止路径遍历
-  if (skillId.includes('..') || skillId.includes('/') || skillId.includes('\\')) {
+  if (
+    skillId.includes('..') ||
+    skillId.includes('/') ||
+    skillId.includes('\\')
+  ) {
     return false;
   }
   // 禁止空字符串
@@ -44,7 +48,9 @@ function isValidSkillId(skillId: string): boolean {
 /**
  * 解析 SKILL.md 的 YAML frontmatter
  */
-function parseFrontmatter(content: string): { name: string; description: string } | null {
+function parseFrontmatter(
+  content: string,
+): { name: string; description: string } | null {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
 

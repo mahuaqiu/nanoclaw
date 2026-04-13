@@ -224,7 +224,9 @@ function buildVolumeMounts(
   );
 
   // Get assigned skills from database (empty if no profileId)
-  const assignedSkillIds = profileId ? getAssignedSkills(group.jid || '', profileId) : [];
+  const assignedSkillIds = profileId
+    ? getAssignedSkills(group.jid || '', profileId)
+    : [];
 
   // Sync only assigned skills to profile directory
   if (assignedSkillIds.length > 0) {
@@ -239,7 +241,11 @@ function buildVolumeMounts(
       if (skill) {
         const skillDir = path.join(profileSkillsDir, skillId);
         fs.mkdirSync(skillDir, { recursive: true });
-        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skill.content, 'utf-8');
+        fs.writeFileSync(
+          path.join(skillDir, 'SKILL.md'),
+          skill.content,
+          'utf-8',
+        );
       }
     }
   }
@@ -261,7 +267,10 @@ function buildVolumeMounts(
 
   // Per-profile IPC namespace: each profile gets its own IPC directory
   // This prevents cross-profile privilege escalation via IPC
-  const groupIpcDir = resolveProfileIpcPath(group.folder, profileId || 'default');
+  const groupIpcDir = resolveProfileIpcPath(
+    group.folder,
+    profileId || 'default',
+  );
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
@@ -786,7 +795,10 @@ export function writeTasksSnapshot(
   profileId?: string,
 ): void {
   // Write filtered tasks to the profile's IPC directory
-  const groupIpcDir = resolveProfileIpcPath(groupFolder, profileId || 'default');
+  const groupIpcDir = resolveProfileIpcPath(
+    groupFolder,
+    profileId || 'default',
+  );
   fs.mkdirSync(groupIpcDir, { recursive: true });
 
   // Main sees all tasks, others only see their own
@@ -817,7 +829,10 @@ export function writeGroupsSnapshot(
   _registeredJids: Set<string>,
   profileId?: string,
 ): void {
-  const groupIpcDir = resolveProfileIpcPath(groupFolder, profileId || 'default');
+  const groupIpcDir = resolveProfileIpcPath(
+    groupFolder,
+    profileId || 'default',
+  );
   fs.mkdirSync(groupIpcDir, { recursive: true });
 
   // Main sees all groups; others see nothing (they can't activate groups)

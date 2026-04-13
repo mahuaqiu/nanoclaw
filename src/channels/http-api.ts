@@ -26,7 +26,14 @@ import http from 'http';
 import https from 'https';
 import url from 'url';
 import { registerChannel, ChannelOpts } from './registry.js';
-import { Channel, NewMessage, RegisteredGroup, AgentProfile, ContainerConfig, SendMessageOptions } from '../types.js';
+import {
+  Channel,
+  NewMessage,
+  RegisteredGroup,
+  AgentProfile,
+  ContainerConfig,
+  SendMessageOptions,
+} from '../types.js';
 import {
   addProfile,
   getProfiles,
@@ -81,7 +88,10 @@ class HttpApiChannel implements Channel {
 
     await new Promise<void>((resolve, reject) => {
       this.server!.listen(this.port, () => {
-        logger.info({ channel: this.name, port: this.port }, 'HTTP API server started');
+        logger.info(
+          { channel: this.name, port: this.port },
+          'HTTP API server started',
+        );
         resolve();
       });
       this.server!.on('error', reject);
@@ -90,7 +100,11 @@ class HttpApiChannel implements Channel {
     this.connected = true;
   }
 
-  async sendMessage(jid: string, text: string, options?: SendMessageOptions): Promise<void> {
+  async sendMessage(
+    jid: string,
+    text: string,
+    options?: SendMessageOptions,
+  ): Promise<void> {
     const chatId = jid.replace('http:', '');
     const callbackUrl = callbackUrls.get(jid);
 
@@ -104,7 +118,10 @@ class HttpApiChannel implements Channel {
         outbox.set(jid, []);
       }
       outbox.get(jid)!.push(text);
-      logger.debug({ channel: this.name, jid, length: text.length }, 'Message added to outbox');
+      logger.debug(
+        { channel: this.name, jid, length: text.length },
+        'Message added to outbox',
+      );
     }
   }
 
@@ -149,18 +166,26 @@ class HttpApiChannel implements Channel {
           let body = '';
           const statusCode = res.statusCode || 0;
           res.setEncoding('utf8');
-          res.on('data', (chunk) => { body += chunk; });
+          res.on('data', (chunk) => {
+            body += chunk;
+          });
           res.on('end', () => {
             if (statusCode >= 200 && statusCode < 300) {
               logger.info(
                 { channel: this.name, chatId, callbackUrl, status: statusCode },
-                'Callback push succeeded'
+                'Callback push succeeded',
               );
               resolve();
             } else {
               logger.warn(
-                { channel: this.name, chatId, callbackUrl, status: statusCode, body },
-                'Callback push failed with non-2xx status'
+                {
+                  channel: this.name,
+                  chatId,
+                  callbackUrl,
+                  status: statusCode,
+                  body,
+                },
+                'Callback push failed with non-2xx status',
               );
               reject(new Error(`Callback returned ${statusCode}`));
             }
@@ -170,7 +195,7 @@ class HttpApiChannel implements Channel {
         req.on('error', (err) => {
           logger.error(
             { channel: this.name, chatId, callbackUrl, error: err.message },
-            'Callback push failed'
+            'Callback push failed',
           );
           reject(err);
         });
@@ -179,7 +204,7 @@ class HttpApiChannel implements Channel {
           req.destroy();
           logger.error(
             { channel: this.name, chatId, callbackUrl },
-            'Callback push timeout'
+            'Callback push timeout',
           );
           reject(new Error('Callback timeout'));
         });
@@ -190,8 +215,13 @@ class HttpApiChannel implements Channel {
     } catch (err) {
       // Log error but don't throw - message delivery should not block the system
       logger.error(
-        { channel: this.name, chatId, callbackUrl, error: err instanceof Error ? err.message : String(err) },
-        'Callback push error (message still available in outbox)'
+        {
+          channel: this.name,
+          chatId,
+          callbackUrl,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        'Callback push error (message still available in outbox)',
       );
       // Fallback: add to outbox so caller can still poll if callback fails
       if (!outbox.has(`http:${chatId}`)) {
@@ -221,7 +251,10 @@ class HttpApiChannel implements Channel {
     this.connected = false;
   }
 
-  private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
+  private handleRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
     const parsedUrl = url.parse(req.url!, true);
     const pathname = parsedUrl.pathname;
     const method = req.method;
@@ -239,7 +272,12 @@ class HttpApiChannel implements Channel {
     // Check authentication for other endpoints
     if (!this.checkAuth(req)) {
       res.writeHead(401);
-      res.end(JSON.stringify({ error: 'Unauthorized', hint: 'Set Authorization: Bearer <token> header' }));
+      res.end(
+        JSON.stringify({
+          error: 'Unauthorized',
+          hint: 'Set Authorization: Bearer <token> header',
+        }),
+      );
       return;
     }
 
@@ -254,7 +292,10 @@ class HttpApiChannel implements Channel {
       this.handleListGroups(res);
     } else if (pathname?.match(/^\/api\/groups\/[^/]+$/) && method === 'PUT') {
       this.handleUpdateGroup(pathname, req, res);
-    } else if (pathname?.match(/^\/api\/groups\/[^/]+$/) && method === 'DELETE') {
+    } else if (
+      pathname?.match(/^\/api\/groups\/[^/]+$/) &&
+      method === 'DELETE'
+    ) {
       this.handleDeleteGroup(pathname, res);
     } else if (pathname?.match(/^\/api\/groups\/[^/]+$/) && method === 'GET') {
       this.handleGetGroup(pathname, res);
@@ -266,13 +307,22 @@ class HttpApiChannel implements Channel {
       this.handleProfiles(pathname, req, res);
     } else if (pathname?.startsWith('/api/profiles/') && method === 'POST') {
       this.handleAddProfile(pathname, req, res);
-    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) && method === 'GET') {
+    } else if (
+      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) &&
+      method === 'GET'
+    ) {
       this.handleGetProfile(pathname, res);
-    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) && method === 'PUT') {
+    } else if (
+      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) &&
+      method === 'PUT'
+    ) {
       this.handleUpdateProfile(pathname, req, res);
-    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) && method === 'DELETE') {
+    } else if (
+      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) &&
+      method === 'DELETE'
+    ) {
       this.handleRemoveProfile(pathname, res);
-    // --- Global skills management ---
+      // --- Global skills management ---
     } else if (pathname === '/api/skills' && method === 'GET') {
       this.handleListSkills(res);
     } else if (pathname?.startsWith('/api/skills/') && method === 'GET') {
@@ -283,12 +333,21 @@ class HttpApiChannel implements Channel {
       this.handleUpdateSkill(pathname, req, res);
     } else if (pathname?.startsWith('/api/skills/') && method === 'DELETE') {
       this.handleDeleteSkill(pathname, res);
-    // --- Profile skills assignment ---
-    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills$/) && method === 'GET') {
+      // --- Profile skills assignment ---
+    } else if (
+      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills$/) &&
+      method === 'GET'
+    ) {
       this.handleListProfileSkills(pathname, res);
-    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills\/[^/]+$/) && method === 'POST') {
+    } else if (
+      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills\/[^/]+$/) &&
+      method === 'POST'
+    ) {
       this.handleAssignSkill(pathname, res);
-    } else if (pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills\/[^/]+$/) && method === 'DELETE') {
+    } else if (
+      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills\/[^/]+$/) &&
+      method === 'DELETE'
+    ) {
       this.handleRemoveSkill(pathname, res);
     } else {
       res.writeHead(404);
@@ -309,7 +368,10 @@ class HttpApiChannel implements Channel {
     return parts[1] === apiToken;
   }
 
-  private async handleReceiveMessage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleReceiveMessage(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     try {
       const body = await this.readBody(req);
       const data = JSON.parse(body);
@@ -317,7 +379,11 @@ class HttpApiChannel implements Channel {
       // Validate required fields
       if (!data.chat_id || !data.sender || !data.content) {
         res.writeHead(400);
-        res.end(JSON.stringify({ error: 'Missing required fields: chat_id, sender, content' }));
+        res.end(
+          JSON.stringify({
+            error: 'Missing required fields: chat_id, sender, content',
+          }),
+        );
         return;
       }
 
@@ -328,8 +394,12 @@ class HttpApiChannel implements Channel {
       if (data.callback_url) {
         callbackUrls.set(chatJid, data.callback_url);
         logger.info(
-          { channel: this.name, chat_id: data.chat_id, callback_url: data.callback_url },
-          'Callback URL registered for chat'
+          {
+            channel: this.name,
+            chat_id: data.chat_id,
+            callback_url: data.callback_url,
+          },
+          'Callback URL registered for chat',
         );
       }
 
@@ -361,15 +431,20 @@ class HttpApiChannel implements Channel {
       this.opts.onMessage(chatJid, message);
 
       res.writeHead(200);
-      res.end(JSON.stringify({
-        status: 'ok',
-        message_id: message.id,
-        callback_mode: !!data.callback_url,
-        callback_url: data.callback_url || null,
-      }));
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          message_id: message.id,
+          callback_mode: !!data.callback_url,
+          callback_url: data.callback_url || null,
+        }),
+      );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error({ channel: this.name, error: errorMessage }, 'Failed to process message');
+      logger.error(
+        { channel: this.name, error: errorMessage },
+        'Failed to process message',
+      );
       res.writeHead(500);
       res.end(JSON.stringify({ error: errorMessage }));
     }
@@ -390,7 +465,10 @@ class HttpApiChannel implements Channel {
     res.end(JSON.stringify({ jid: fullJid, messages, count: messages.length }));
   }
 
-  private async handleRegister(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleRegister(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     try {
       const body = await this.readBody(req);
       const data = JSON.parse(body);
@@ -398,9 +476,11 @@ class HttpApiChannel implements Channel {
       // Required fields
       if (!data.chat_id || !data.folder) {
         res.writeHead(400);
-        res.end(JSON.stringify({
-          error: 'Missing required fields: chat_id, folder'
-        }));
+        res.end(
+          JSON.stringify({
+            error: 'Missing required fields: chat_id, folder',
+          }),
+        );
         return;
       }
 
@@ -411,55 +491,74 @@ class HttpApiChannel implements Channel {
       let legacyName: string | undefined;
       let legacyTrigger: string | undefined;
 
-      if (data.profiles && Array.isArray(data.profiles) && data.profiles.length > 0) {
+      if (
+        data.profiles &&
+        Array.isArray(data.profiles) &&
+        data.profiles.length > 0
+      ) {
         // 新格式：profiles 数组
         for (const p of data.profiles) {
           if (!p.name || !p.trigger) {
             res.writeHead(400);
-            res.end(JSON.stringify({
-              error: 'Each profile must have name and trigger fields'
-            }));
+            res.end(
+              JSON.stringify({
+                error: 'Each profile must have name and trigger fields',
+              }),
+            );
             return;
           }
         }
 
         // 检查 trigger 是否重复
-        const triggers = data.profiles.map((p: { trigger: string }) => p.trigger);
+        const triggers = data.profiles.map(
+          (p: { trigger: string }) => p.trigger,
+        );
         const uniqueTriggers = new Set(triggers);
         if (uniqueTriggers.size !== triggers.length) {
           res.writeHead(400);
-          res.end(JSON.stringify({
-            error: 'Duplicate triggers in profiles',
-            triggers
-          }));
+          res.end(
+            JSON.stringify({
+              error: 'Duplicate triggers in profiles',
+              triggers,
+            }),
+          );
           return;
         }
 
-        profiles = data.profiles.map((p: {
-          id?: string;
-          name: string;
-          trigger: string;
-          description?: string;
-          containerConfig?: ContainerConfig;
-          isActive?: boolean;
-        }, index: number) => ({
-          id: p.id || `profile-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
-          name: p.name,
-          trigger: p.trigger,
-          description: p.description,
-          containerConfig: p.containerConfig,
-          isActive: p.isActive !== false,
-          addedAt: new Date().toISOString(),
-        }));
+        profiles = data.profiles.map(
+          (
+            p: {
+              id?: string;
+              name: string;
+              trigger: string;
+              description?: string;
+              containerConfig?: ContainerConfig;
+              isActive?: boolean;
+            },
+            index: number,
+          ) => ({
+            id:
+              p.id ||
+              `profile-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+            name: p.name,
+            trigger: p.trigger,
+            description: p.description,
+            containerConfig: p.containerConfig,
+            isActive: p.isActive !== false,
+            addedAt: new Date().toISOString(),
+          }),
+        );
       } else if (data.name && data.trigger) {
         // 旧格式：单一 name + trigger
         legacyName = data.name;
         legacyTrigger = data.trigger;
       } else {
         res.writeHead(400);
-        res.end(JSON.stringify({
-          error: 'Must provide either profiles array or name+trigger fields'
-        }));
+        res.end(
+          JSON.stringify({
+            error: 'Must provide either profiles array or name+trigger fields',
+          }),
+        );
         return;
       }
 
@@ -493,15 +592,17 @@ class HttpApiChannel implements Channel {
       const finalProfiles = getProfiles(chatJid);
 
       res.writeHead(200);
-      res.end(JSON.stringify({
-        status: 'ok',
-        jid: chatJid,
-        folder: group.folder,
-        is_main: group.isMain,
-        requires_trigger: group.requiresTrigger,
-        profiles: finalProfiles,
-        profiles_count: finalProfiles.length,
-      }));
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          jid: chatJid,
+          folder: group.folder,
+          is_main: group.isMain,
+          requires_trigger: group.requiresTrigger,
+          profiles: finalProfiles,
+          profiles_count: finalProfiles.length,
+        }),
+      );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       res.writeHead(500);
@@ -534,17 +635,23 @@ class HttpApiChannel implements Channel {
     const profiles = getProfiles(jid);
 
     res.writeHead(200);
-    res.end(JSON.stringify({
-      jid,
-      folder: group.folder,
-      is_main: group.isMain,
-      requires_trigger: group.requiresTrigger,
-      profiles,
-      profiles_count: profiles.length,
-    }));
+    res.end(
+      JSON.stringify({
+        jid,
+        folder: group.folder,
+        is_main: group.isMain,
+        requires_trigger: group.requiresTrigger,
+        profiles,
+        profiles_count: profiles.length,
+      }),
+    );
   }
 
-  private async handleUpdateGroup(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleUpdateGroup(
+    pathname: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     try {
       const jid = pathname.replace('/api/groups/', '');
 
@@ -565,46 +672,63 @@ class HttpApiChannel implements Channel {
       let legacyName: string | undefined;
       let legacyTrigger: string | undefined;
 
-      if (data.profiles && Array.isArray(data.profiles) && data.profiles.length > 0) {
+      if (
+        data.profiles &&
+        Array.isArray(data.profiles) &&
+        data.profiles.length > 0
+      ) {
         // 新格式：profiles 数组
         for (const p of data.profiles) {
           if (!p.name || !p.trigger) {
             res.writeHead(400);
-            res.end(JSON.stringify({
-              error: 'Each profile must have name and trigger fields'
-            }));
+            res.end(
+              JSON.stringify({
+                error: 'Each profile must have name and trigger fields',
+              }),
+            );
             return;
           }
         }
 
         // 检查 trigger 是否重复
-        const triggers = data.profiles.map((p: { trigger: string }) => p.trigger);
+        const triggers = data.profiles.map(
+          (p: { trigger: string }) => p.trigger,
+        );
         const uniqueTriggers = new Set(triggers);
         if (uniqueTriggers.size !== triggers.length) {
           res.writeHead(400);
-          res.end(JSON.stringify({
-            error: 'Duplicate triggers in profiles',
-            triggers
-          }));
+          res.end(
+            JSON.stringify({
+              error: 'Duplicate triggers in profiles',
+              triggers,
+            }),
+          );
           return;
         }
 
-        profiles = data.profiles.map((p: {
-          id?: string;
-          name: string;
-          trigger: string;
-          description?: string;
-          containerConfig?: ContainerConfig;
-          isActive?: boolean;
-        }, index: number) => ({
-          id: p.id || `profile-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
-          name: p.name,
-          trigger: p.trigger,
-          description: p.description,
-          containerConfig: p.containerConfig,
-          isActive: p.isActive !== false,
-          addedAt: new Date().toISOString(),
-        }));
+        profiles = data.profiles.map(
+          (
+            p: {
+              id?: string;
+              name: string;
+              trigger: string;
+              description?: string;
+              containerConfig?: ContainerConfig;
+              isActive?: boolean;
+            },
+            index: number,
+          ) => ({
+            id:
+              p.id ||
+              `profile-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+            name: p.name,
+            trigger: p.trigger,
+            description: p.description,
+            containerConfig: p.containerConfig,
+            isActive: p.isActive !== false,
+            addedAt: new Date().toISOString(),
+          }),
+        );
       } else if (data.name && data.trigger) {
         // 旧格式：单一 name + trigger
         legacyName = data.name;
@@ -631,21 +755,29 @@ class HttpApiChannel implements Channel {
       // 获取最终写入的 profiles
       const finalProfiles = getProfiles(jid);
 
-      logger.info({ channel: this.name, jid, profiles_count: finalProfiles.length }, 'Group updated');
+      logger.info(
+        { channel: this.name, jid, profiles_count: finalProfiles.length },
+        'Group updated',
+      );
 
       res.writeHead(200);
-      res.end(JSON.stringify({
-        status: 'ok',
-        jid,
-        folder: updatedGroup.folder,
-        is_main: updatedGroup.isMain,
-        requires_trigger: updatedGroup.requiresTrigger,
-        profiles: finalProfiles,
-        profiles_count: finalProfiles.length,
-      }));
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          jid,
+          folder: updatedGroup.folder,
+          is_main: updatedGroup.isMain,
+          requires_trigger: updatedGroup.requiresTrigger,
+          profiles: finalProfiles,
+          profiles_count: finalProfiles.length,
+        }),
+      );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error({ channel: this.name, error: errorMessage }, 'Failed to update group');
+      logger.error(
+        { channel: this.name, error: errorMessage },
+        'Failed to update group',
+      );
       res.writeHead(500);
       res.end(JSON.stringify({ error: errorMessage }));
     }
@@ -679,17 +811,25 @@ class HttpApiChannel implements Channel {
       return;
     }
 
-    logger.info({ channel: this.name, jid, folder: result.folder }, 'Group deleted');
+    logger.info(
+      { channel: this.name, jid, folder: result.folder },
+      'Group deleted',
+    );
 
     res.writeHead(200);
-    res.end(JSON.stringify({
-      status: 'ok',
-      jid,
-      folder: result.folder,
-    }));
+    res.end(
+      JSON.stringify({
+        status: 'ok',
+        jid,
+        folder: result.folder,
+      }),
+    );
   }
 
-  private async handleClearSession(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleClearSession(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     try {
       const body = await this.readBody(req);
       const data = JSON.parse(body);
@@ -706,7 +846,12 @@ class HttpApiChannel implements Channel {
 
       if (!group) {
         res.writeHead(404);
-        res.end(JSON.stringify({ error: 'Chat not registered', chat_id: data.chat_id }));
+        res.end(
+          JSON.stringify({
+            error: 'Chat not registered',
+            chat_id: data.chat_id,
+          }),
+        );
         return;
       }
 
@@ -723,18 +868,26 @@ class HttpApiChannel implements Channel {
       // Also clear callback URL
       callbackUrls.delete(chatJid);
 
-      logger.info({ channel: this.name, chat_id: data.chat_id, folder: group.folder }, 'Session cleared');
+      logger.info(
+        { channel: this.name, chat_id: data.chat_id, folder: group.folder },
+        'Session cleared',
+      );
 
       res.writeHead(200);
-      res.end(JSON.stringify({
-        status: 'ok',
-        message: 'Session cleared, next conversation will start fresh',
-        chat_id: data.chat_id,
-        folder: group.folder
-      }));
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          message: 'Session cleared, next conversation will start fresh',
+          chat_id: data.chat_id,
+          folder: group.folder,
+        }),
+      );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error({ channel: this.name, error: errorMessage }, 'Failed to clear session');
+      logger.error(
+        { channel: this.name, error: errorMessage },
+        'Failed to clear session',
+      );
       res.writeHead(500);
       res.end(JSON.stringify({ error: errorMessage }));
     }
@@ -749,7 +902,9 @@ class HttpApiChannel implements Channel {
 
     if (!group) {
       res.writeHead(404);
-      res.end(JSON.stringify({ error: 'Chat not registered', chat_id: chatId }));
+      res.end(
+        JSON.stringify({ error: 'Chat not registered', chat_id: chatId }),
+      );
       return;
     }
 
@@ -764,19 +919,25 @@ class HttpApiChannel implements Channel {
     const callbackUrl = callbackUrls.get(chatJid);
 
     res.writeHead(200);
-    res.end(JSON.stringify({
-      chat_id: chatId,
-      jid: chatJid,
-      folder: group.folder,
-      session_id: sessionId || null,
-      has_session: sessionId !== undefined,
-      callback_url: callbackUrl || null,
-    }));
+    res.end(
+      JSON.stringify({
+        chat_id: chatId,
+        jid: chatJid,
+        folder: group.folder,
+        session_id: sessionId || null,
+        has_session: sessionId !== undefined,
+        callback_url: callbackUrl || null,
+      }),
+    );
   }
 
   // --- Profile management handlers ---
 
-  private handleProfiles(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): void {
+  private handleProfiles(
+    pathname: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
     // Extract jid from pathname - could be /api/profiles/{jid} or /api/profiles/{jid}/{profileId}
     const parts = pathname.replace('/api/profiles/', '').split('/');
     const jid = parts[0];
@@ -799,11 +960,13 @@ class HttpApiChannel implements Channel {
     const profiles = getProfiles(jid);
 
     res.writeHead(200);
-    res.end(JSON.stringify({
-      jid,
-      profiles,
-      count: profiles.length,
-    }));
+    res.end(
+      JSON.stringify({
+        jid,
+        profiles,
+        count: profiles.length,
+      }),
+    );
   }
 
   private handleGetProfile(pathname: string, res: http.ServerResponse): void {
@@ -829,13 +992,19 @@ class HttpApiChannel implements Channel {
     }
 
     res.writeHead(200);
-    res.end(JSON.stringify({
-      jid,
-      profile,
-    }));
+    res.end(
+      JSON.stringify({
+        jid,
+        profile,
+      }),
+    );
   }
 
-  private async handleAddProfile(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleAddProfile(
+    pathname: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     try {
       const jid = pathname.replace('/api/profiles/', '').split('/')[0];
 
@@ -853,15 +1022,24 @@ class HttpApiChannel implements Channel {
 
       if (!data.name || !data.trigger) {
         res.writeHead(400);
-        res.end(JSON.stringify({ error: 'Missing required fields: name, trigger' }));
+        res.end(
+          JSON.stringify({ error: 'Missing required fields: name, trigger' }),
+        );
         return;
       }
 
       // Check if trigger already exists
-      const profileId = data.id || `profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const profileId =
+        data.id ||
+        `profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       if (triggerExists(jid, data.trigger, profileId)) {
         res.writeHead(400);
-        res.end(JSON.stringify({ error: 'Trigger already exists for another profile', trigger: data.trigger }));
+        res.end(
+          JSON.stringify({
+            error: 'Trigger already exists for another profile',
+            trigger: data.trigger,
+          }),
+        );
         return;
       }
 
@@ -877,23 +1055,40 @@ class HttpApiChannel implements Channel {
 
       addProfile(jid, profile);
 
-      logger.info({ channel: this.name, jid, profileId: profile.id, trigger: profile.trigger }, 'Profile added');
+      logger.info(
+        {
+          channel: this.name,
+          jid,
+          profileId: profile.id,
+          trigger: profile.trigger,
+        },
+        'Profile added',
+      );
 
       res.writeHead(200);
-      res.end(JSON.stringify({
-        status: 'ok',
-        jid,
-        profile,
-      }));
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          jid,
+          profile,
+        }),
+      );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error({ channel: this.name, error: errorMessage }, 'Failed to add profile');
+      logger.error(
+        { channel: this.name, error: errorMessage },
+        'Failed to add profile',
+      );
       res.writeHead(500);
       res.end(JSON.stringify({ error: errorMessage }));
     }
   }
 
-  private async handleUpdateProfile(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleUpdateProfile(
+    pathname: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     try {
       const parts = pathname.replace('/api/profiles/', '').split('/');
       const jid = parts[0];
@@ -921,36 +1116,53 @@ class HttpApiChannel implements Channel {
       // Check trigger conflict if updating trigger
       if (data.trigger && triggerExists(jid, data.trigger, profileId)) {
         res.writeHead(400);
-        res.end(JSON.stringify({ error: 'Trigger already exists for another profile', trigger: data.trigger }));
+        res.end(
+          JSON.stringify({
+            error: 'Trigger already exists for another profile',
+            trigger: data.trigger,
+          }),
+        );
         return;
       }
 
       const updates: Partial<AgentProfile> = {};
       if (data.name !== undefined) updates.name = data.name;
       if (data.trigger !== undefined) updates.trigger = data.trigger;
-      if (data.description !== undefined) updates.description = data.description;
+      if (data.description !== undefined)
+        updates.description = data.description;
       if (data.isActive !== undefined) updates.isActive = data.isActive;
 
       updateProfile(jid, profileId, updates);
 
-      logger.info({ channel: this.name, jid, profileId, updates }, 'Profile updated');
+      logger.info(
+        { channel: this.name, jid, profileId, updates },
+        'Profile updated',
+      );
 
       res.writeHead(200);
-      res.end(JSON.stringify({
-        status: 'ok',
-        jid,
-        profileId,
-        updates,
-      }));
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          jid,
+          profileId,
+          updates,
+        }),
+      );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error({ channel: this.name, error: errorMessage }, 'Failed to update profile');
+      logger.error(
+        { channel: this.name, error: errorMessage },
+        'Failed to update profile',
+      );
       res.writeHead(500);
       res.end(JSON.stringify({ error: errorMessage }));
     }
   }
 
-  private handleRemoveProfile(pathname: string, res: http.ServerResponse): void {
+  private handleRemoveProfile(
+    pathname: string,
+    res: http.ServerResponse,
+  ): void {
     const parts = pathname.replace('/api/profiles/', '').split('/');
     const jid = parts[0];
     const profileId = parts[1];
@@ -984,11 +1196,13 @@ class HttpApiChannel implements Channel {
     logger.info({ channel: this.name, jid, profileId }, 'Profile removed');
 
     res.writeHead(200);
-    res.end(JSON.stringify({
-      status: 'ok',
-      jid,
-      profileId,
-    }));
+    res.end(
+      JSON.stringify({
+        status: 'ok',
+        jid,
+        profileId,
+      }),
+    );
   }
 
   // --- Global skills management handlers ---
@@ -1013,7 +1227,11 @@ class HttpApiChannel implements Channel {
     res.end(JSON.stringify(skill));
   }
 
-  private async handleCreateSkill(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleCreateSkill(
+    pathname: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     try {
       const skillId = pathname.replace('/api/skills/', '');
 
@@ -1040,13 +1258,20 @@ class HttpApiChannel implements Channel {
       res.end(JSON.stringify({ status: 'ok', id: skillId }));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error({ channel: this.name, error: errorMessage }, 'Failed to create skill');
+      logger.error(
+        { channel: this.name, error: errorMessage },
+        'Failed to create skill',
+      );
       res.writeHead(500);
       res.end(JSON.stringify({ error: errorMessage }));
     }
   }
 
-  private async handleUpdateSkill(pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleUpdateSkill(
+    pathname: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     try {
       const skillId = pathname.replace('/api/skills/', '');
 
@@ -1073,7 +1298,10 @@ class HttpApiChannel implements Channel {
       res.end(JSON.stringify({ status: 'ok', id: skillId }));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error({ channel: this.name, error: errorMessage }, 'Failed to update skill');
+      logger.error(
+        { channel: this.name, error: errorMessage },
+        'Failed to update skill',
+      );
       res.writeHead(500);
       res.end(JSON.stringify({ error: errorMessage }));
     }
@@ -1102,7 +1330,10 @@ class HttpApiChannel implements Channel {
 
   // --- Profile skills assignment handlers ---
 
-  private handleListProfileSkills(pathname: string, res: http.ServerResponse): void {
+  private handleListProfileSkills(
+    pathname: string,
+    res: http.ServerResponse,
+  ): void {
     const parts = pathname.replace('/api/profiles/', '').split('/');
     const jid = parts[0];
     const profileId = parts[1];
@@ -1172,7 +1403,10 @@ class HttpApiChannel implements Channel {
 
     assignSkill(jid, profileId, skillId);
 
-    logger.info({ channel: this.name, jid, profileId, skillId }, 'Skill assigned to profile');
+    logger.info(
+      { channel: this.name, jid, profileId, skillId },
+      'Skill assigned to profile',
+    );
 
     res.writeHead(200);
     res.end(JSON.stringify({ status: 'ok', jid, profileId, skillId }));
@@ -1202,13 +1436,18 @@ class HttpApiChannel implements Channel {
 
     if (!isSkillAssigned(jid, profileId, skillId)) {
       res.writeHead(404);
-      res.end(JSON.stringify({ error: 'Skill not assigned to profile', skillId }));
+      res.end(
+        JSON.stringify({ error: 'Skill not assigned to profile', skillId }),
+      );
       return;
     }
 
     removeSkillAssignment(jid, profileId, skillId);
 
-    logger.info({ channel: this.name, jid, profileId, skillId }, 'Skill removed from profile');
+    logger.info(
+      { channel: this.name, jid, profileId, skillId },
+      'Skill removed from profile',
+    );
 
     res.writeHead(200);
     res.end(JSON.stringify({ status: 'ok', jid, profileId, skillId }));
@@ -1218,7 +1457,9 @@ class HttpApiChannel implements Channel {
     return new Promise((resolve, reject) => {
       let body = '';
       req.setEncoding('utf8');
-      req.on('data', (chunk) => { body += chunk; });
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
       req.on('end', () => resolve(body));
       req.on('error', reject);
     });

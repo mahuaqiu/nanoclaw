@@ -488,19 +488,27 @@ export async function processTaskIpc(
     case 'add_profile':
       // Only main group can add profiles
       if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized add_profile attempt blocked');
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized add_profile attempt blocked',
+        );
         break;
       }
       if (data.jid && data.profile) {
         const group = registeredGroups[data.jid];
         if (!group) {
-          logger.warn({ jid: data.jid }, 'Cannot add profile: group not registered');
+          logger.warn(
+            { jid: data.jid },
+            'Cannot add profile: group not registered',
+          );
           break;
         }
 
         // Validate profile data
         const profile: AgentProfile = {
-          id: data.profile.id || `profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          id:
+            data.profile.id ||
+            `profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           name: data.profile.name,
           trigger: data.profile.trigger,
           description: data.profile.description,
@@ -524,7 +532,10 @@ export async function processTaskIpc(
           'Profile added via IPC',
         );
       } else {
-        logger.warn({ data }, 'Invalid add_profile request - missing required fields');
+        logger.warn(
+          { data },
+          'Invalid add_profile request - missing required fields',
+        );
       }
       break;
 
@@ -532,24 +543,36 @@ export async function processTaskIpc(
       if (data.jid && data.profileId && data.updates) {
         const group = registeredGroups[data.jid];
         if (!group) {
-          logger.warn({ jid: data.jid }, 'Cannot update profile: group not registered');
+          logger.warn(
+            { jid: data.jid },
+            'Cannot update profile: group not registered',
+          );
           break;
         }
 
         const existingProfile = getProfile(data.jid, data.profileId);
         if (!existingProfile) {
-          logger.warn({ jid: data.jid, profileId: data.profileId }, 'Profile not found');
+          logger.warn(
+            { jid: data.jid, profileId: data.profileId },
+            'Profile not found',
+          );
           break;
         }
 
         // Authorization check: main group or same folder
         if (!isMain && group.folder !== sourceGroup) {
-          logger.warn({ sourceGroup, jid: data.jid }, 'Unauthorized profile update');
+          logger.warn(
+            { sourceGroup, jid: data.jid },
+            'Unauthorized profile update',
+          );
           break;
         }
 
         // If updating trigger, check for conflicts
-        if (data.updates.trigger && triggerExists(data.jid, data.updates.trigger, data.profileId)) {
+        if (
+          data.updates.trigger &&
+          triggerExists(data.jid, data.updates.trigger, data.profileId)
+        ) {
           logger.warn(
             { jid: data.jid, trigger: data.updates.trigger },
             'Trigger already exists for another profile',
@@ -563,20 +586,29 @@ export async function processTaskIpc(
           'Profile updated via IPC',
         );
       } else {
-        logger.warn({ data }, 'Invalid update_profile request - missing required fields');
+        logger.warn(
+          { data },
+          'Invalid update_profile request - missing required fields',
+        );
       }
       break;
 
     case 'remove_profile':
       // Only main group can remove profiles
       if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized remove_profile attempt blocked');
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized remove_profile attempt blocked',
+        );
         break;
       }
       if (data.jid && data.profileId) {
         const group = registeredGroups[data.jid];
         if (!group) {
-          logger.warn({ jid: data.jid }, 'Cannot remove profile: group not registered');
+          logger.warn(
+            { jid: data.jid },
+            'Cannot remove profile: group not registered',
+          );
           break;
         }
 
@@ -593,7 +625,10 @@ export async function processTaskIpc(
           'Profile removed via IPC',
         );
       } else {
-        logger.warn({ data }, 'Invalid remove_profile request - missing required fields');
+        logger.warn(
+          { data },
+          'Invalid remove_profile request - missing required fields',
+        );
       }
       break;
 
@@ -602,33 +637,63 @@ export async function processTaskIpc(
       if (data.jid) {
         const group = registeredGroups[data.jid];
         if (!group) {
-          logger.warn({ jid: data.jid }, 'Cannot list profiles: group not registered');
+          logger.warn(
+            { jid: data.jid },
+            'Cannot list profiles: group not registered',
+          );
           break;
         }
 
         // Authorization: main group can list any, others can only list their own
         if (!isMain && group.folder !== sourceGroup) {
-          logger.warn({ sourceGroup, jid: data.jid }, 'Unauthorized list_profiles attempt');
+          logger.warn(
+            { sourceGroup, jid: data.jid },
+            'Unauthorized list_profiles attempt',
+          );
           break;
         }
 
         const profiles = getProfiles(data.jid);
         // Write result to IPC input directory for agent to read
         const ipcBaseDir = path.join(DATA_DIR, 'ipc');
-        const resultFile = path.join(ipcBaseDir, sourceGroup, 'input', 'profiles_list.json');
+        const resultFile = path.join(
+          ipcBaseDir,
+          sourceGroup,
+          'input',
+          'profiles_list.json',
+        );
         fs.mkdirSync(path.dirname(resultFile), { recursive: true });
-        fs.writeFileSync(resultFile, JSON.stringify({ profiles, jid: data.jid }, null, 2));
-        logger.info({ jid: data.jid, count: profiles.length }, 'Profiles listed via IPC');
+        fs.writeFileSync(
+          resultFile,
+          JSON.stringify({ profiles, jid: data.jid }, null, 2),
+        );
+        logger.info(
+          { jid: data.jid, count: profiles.length },
+          'Profiles listed via IPC',
+        );
       } else {
         // If no jid specified, list profiles for current group
         const ipcBaseDir = path.join(DATA_DIR, 'ipc');
-        const group = Object.values(registeredGroups).find(g => g.folder === sourceGroup);
+        const group = Object.values(registeredGroups).find(
+          (g) => g.folder === sourceGroup,
+        );
         if (group && group.jid) {
           const profiles = getProfiles(group.jid);
-          const resultFile = path.join(ipcBaseDir, sourceGroup, 'input', 'profiles_list.json');
+          const resultFile = path.join(
+            ipcBaseDir,
+            sourceGroup,
+            'input',
+            'profiles_list.json',
+          );
           fs.mkdirSync(path.dirname(resultFile), { recursive: true });
-          fs.writeFileSync(resultFile, JSON.stringify({ profiles, jid: group.jid }, null, 2));
-          logger.info({ jid: group.jid, count: profiles.length }, 'Own profiles listed via IPC');
+          fs.writeFileSync(
+            resultFile,
+            JSON.stringify({ profiles, jid: group.jid }, null, 2),
+          );
+          logger.info(
+            { jid: group.jid, count: profiles.length },
+            'Own profiles listed via IPC',
+          );
         }
       }
       break;
@@ -637,30 +702,53 @@ export async function processTaskIpc(
       if (data.jid && data.profileId) {
         const group = registeredGroups[data.jid];
         if (!group) {
-          logger.warn({ jid: data.jid }, 'Cannot get profile: group not registered');
+          logger.warn(
+            { jid: data.jid },
+            'Cannot get profile: group not registered',
+          );
           break;
         }
 
         // Authorization: main group can get any, others can only get their own
         if (!isMain && group.folder !== sourceGroup) {
-          logger.warn({ sourceGroup, jid: data.jid }, 'Unauthorized get_profile attempt');
+          logger.warn(
+            { sourceGroup, jid: data.jid },
+            'Unauthorized get_profile attempt',
+          );
           break;
         }
 
         const profile = getProfile(data.jid, data.profileId);
         if (!profile) {
-          logger.warn({ jid: data.jid, profileId: data.profileId }, 'Profile not found');
+          logger.warn(
+            { jid: data.jid, profileId: data.profileId },
+            'Profile not found',
+          );
           break;
         }
 
         // Write result to IPC input directory
         const ipcBaseDir = path.join(DATA_DIR, 'ipc');
-        const resultFile = path.join(ipcBaseDir, sourceGroup, 'input', 'profile_detail.json');
+        const resultFile = path.join(
+          ipcBaseDir,
+          sourceGroup,
+          'input',
+          'profile_detail.json',
+        );
         fs.mkdirSync(path.dirname(resultFile), { recursive: true });
-        fs.writeFileSync(resultFile, JSON.stringify({ profile, jid: data.jid }, null, 2));
-        logger.info({ jid: data.jid, profileId: data.profileId }, 'Profile retrieved via IPC');
+        fs.writeFileSync(
+          resultFile,
+          JSON.stringify({ profile, jid: data.jid }, null, 2),
+        );
+        logger.info(
+          { jid: data.jid, profileId: data.profileId },
+          'Profile retrieved via IPC',
+        );
       } else {
-        logger.warn({ data }, 'Invalid get_profile request - missing required fields');
+        logger.warn(
+          { data },
+          'Invalid get_profile request - missing required fields',
+        );
       }
       break;
 
