@@ -33,7 +33,14 @@
       "Bash(tar -xO)",
       "Bash(onecli version:*)",
       "Bash(git fetch:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "WebSearch",
+      "Bash(sqlite3 docker_volume/store/nanoclaw.db \"SELECT * FROM sessions;\")",
+      "Bash(sqlite3 docker_volume/store/nanoclaw.db \".schema sessions\")",
+      "Bash(sqlite3:*)",
+      "Bash(node -e \"const Database = require\\('better-sqlite3'\\); const db = new Database\\('./docker_volume/store/nanoclaw.db'\\); const tables = db.prepare\\(\\\\\"SELECT name FROM sqlite_master WHERE type='table'\\\\\"\\).all\\(\\); console.log\\(JSON.stringify\\(tables\\)\\);\")",
+      "Bash(grep -E \"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$\")",
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('docker_volume/store/messages.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT * FROM sessions'\\); rows = cursor.fetchall\\(\\); print\\(rows[:10]\\)\")"
     ]
   }
 }

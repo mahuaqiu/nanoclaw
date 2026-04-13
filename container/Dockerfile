@@ -53,6 +53,9 @@ COPY agent-runner/ ./
 # Build TypeScript
 RUN npm run build
 
+# Install gosu for proper user switching (fix permissions then drop to node user)
+RUN apt-get update && apt-get install -y gosu && rm -rf /var/lib/apt/lists/*
+
 # Create workspace directories
 RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input
 
@@ -63,13 +66,17 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/
 #
 # In Docker-in-Docker scenarios, /app/src mount may fail due to path resolution.
 # Fall back to pre-built /app/dist/ if source files are not available.
-RUN printf '#!/bin/bash\nset -e\nif [ -d /app/src ] && [ "$(ls -A /app/src 2>/dev/null)" ]; then\n  cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\n  ln -s /app/node_modules /tmp/dist/node_modules\n  chmod -R a-w /tmp/dist\n  DIST_DIR=/tmp/dist\nelse\n  DIST_DIR=/app/dist\nfi\ncat > /tmp/input.json\nnode $DIST_DIR/index.js < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+#
+# IMPORTANT: Fix permissions on mounted directories (Docker Desktop Windows issue)
+# Bind mounts may have incorrect owner (root instead of node), causing write failures.
+RUN printf '#!/bin/bash\nset -e\n# Fix permissions on mounted .claude directory (Docker Desktop Windows bind mount issue)\nif [ -d /home/node/.claude ]; then\n  chown -R node:node /home/node/.claude 2>/dev/null || true\nfi\n# Fix permissions on IPC directory\nif [ -d /workspace/ipc ]; then\n  chown -R node:node /workspace/ipc 2>/dev/null || true\nfi\n# Compile if source mounted\nif [ -d /app/src ] && [ "$(ls -A /app/src 2>/dev/null)" ]; then\n  cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\n  ln -s /app/node_modules /tmp/dist/node_modules\n  chmod -R a-w /tmp/dist\n  DIST_DIR=/tmp/dist\nelse\n  DIST_DIR=/app/dist\nfi\n# Read stdin input\ncat > /tmp/input.json\n# Execute as node user\nexec gosu node node $DIST_DIR/index.js < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace && chmod 777 /home/node
 
-# Switch to non-root user (required for --dangerously-skip-permissions)
-USER node
+# Don't switch to node user here - entrypoint will use gosu to drop privileges
+# This allows entrypoint to fix permissions first
+USER root
 
 # Set working directory to group workspace
 WORKDIR /workspace/group
