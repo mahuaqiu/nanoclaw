@@ -30,7 +30,9 @@
       "Bash(docker logs:*)",
       "Bash(docker restart:*)",
       "Bash(tail:*)",
-      "Bash(tar -xO)"
+      "Bash(tar -xO)",
+      "Bash(onecli version:*)",
+      "Bash(git fetch:*)"
     ]
   }
 }

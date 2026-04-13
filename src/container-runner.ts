@@ -16,7 +16,6 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
-  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import {
@@ -33,13 +32,10 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 import { getAssignedSkills } from './db.js';
 import { getGlobalSkill } from './skill-manager.js';
-
-const onecli = new OneCLI({ url: ONECLI_URL });
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -92,7 +88,7 @@ function buildVolumeMounts(
     });
 
     // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the OneCLI gateway, never exposed to containers.
+    // Credentials are passed via environment variables, never exposed to containers.
     const envFile = path.join(projectRoot, '.env');
     if (fs.existsSync(envFile)) {
       mounts.push({
@@ -334,7 +330,6 @@ function buildVolumeMounts(
 async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  agentIdentifier?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -347,27 +342,11 @@ async function buildContainerArgs(
   }
 
   // Pass API configuration for custom endpoints (Alibaba Cloud Bailian, Together AI, etc.)
-  // These are used when OneCLI gateway is not available or when using direct API configuration
   if (ANTHROPIC_BASE_URL) {
     args.push('-e', `ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}`);
   }
   if (ANTHROPIC_API_KEY) {
     args.push('-e', `ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`);
-  }
-
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
-  } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
-    );
   }
 
   // Runtime-specific args for host gateway resolution
@@ -417,15 +396,7 @@ export async function runContainerAgent(
     ? `-${input.profileId.replace(/[^a-zA-Z0-9-]/g, '-')}`
     : '';
   const containerName = `nanoclaw-${safeName}${profileSuffix}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
-  const containerArgs = await buildContainerArgs(
-    mounts,
-    containerName,
-    agentIdentifier,
-  );
+  const containerArgs = await buildContainerArgs(mounts, containerName);
 
   logger.debug(
     {
