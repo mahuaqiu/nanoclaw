@@ -96,16 +96,26 @@ let IPC_INPUT_DIR = IPC_INPUT_DIR_BASE;
 
 // In Docker-in-Docker mode, IPC is inherited via volumes-from at /app/data/ipc/{group}/
 // But with multi-profile support, IPC is mounted directly at /workspace/ipc (profile-specific)
-// We need to use the correct path based on what's available
+// However, Docker cannot mount from inherited paths, so we need to check both:
+// 1. Inherited profile-specific path (works with volumes-from)
+// 2. Base IPC path (direct mount, may fail if volumes-from conflicts)
 function resolveIpcDir(groupFolder: string, profileId?: string): string {
-  // First check if the base IPC directory exists (profile-specific mount)
-  // This is the preferred path for multi-profile support
+  // Priority 1: Inherited profile-specific IPC path (most reliable with volumes-from)
+  if (profileId) {
+    const inheritedProfileIpcDir = `/app/data/ipc/${groupFolder}/profiles/${profileId}/input`;
+    if (fs.existsSync(inheritedProfileIpcDir)) {
+      log(`Using inherited profile IPC path: ${inheritedProfileIpcDir}`);
+      return inheritedProfileIpcDir;
+    }
+  }
+
+  // Priority 2: Base IPC directory (direct mount)
   if (fs.existsSync(IPC_INPUT_DIR_BASE)) {
     log(`Using base IPC path: ${IPC_INPUT_DIR_BASE}`);
     return IPC_INPUT_DIR_BASE;
   }
 
-  // Fallback: check inherited IPC path (Docker-in-Docker without profile)
+  // Priority 3: Inherited group IPC path (fallback, may not be profile-specific)
   const inheritedIpcDir = `/app/data/ipc/${groupFolder}/input`;
   if (fs.existsSync(inheritedIpcDir)) {
     log(`Using inherited IPC path: ${inheritedIpcDir}`);
@@ -365,8 +375,8 @@ function shouldClose(): boolean {
 /**
  * Drain all pending IPC input messages.
  * Returns messages found, or empty array.
- * For multi-profile support, filters broadcast_message by targetProfileId.
- * observer_reply messages are added as context markers.
+ * For multi-profile support, only returns messages that should trigger processing.
+ * observer_reply and non-targeted broadcast are stored as history context, not returned.
  */
 function drainIpcInput(myProfileId?: string): string[] {
   try {
@@ -377,36 +387,42 @@ function drainIpcInput(myProfileId?: string): string[] {
       .sort();
 
     const messages: string[] = [];
+    const historyContext: string[] = []; // 旁观者历史，不触发回复
+
     for (const file of files) {
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
         const data: IpcMessage = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        fs.unlinkSync(filePath);
+        fs.unlinkSync(filePath); // 消费消息文件
 
         // 原始消息类型（向后兼容）
         if (data.type === 'message' && data.text) {
           messages.push(data.text);
         }
 
-        // 广播消息类型：只有 targetProfileId 匹配才处理
+        // 广播消息类型：只有被 @ 的 profile 才处理
         if (data.type === 'broadcast_message') {
           if (data.targetProfileId === myProfileId) {
-            // 被 @ 了 - 提取消息内容
+            // 被 @ 了 - 添加完整消息内容，触发处理
             const formatted = data.messages
               .map((m) => `[${m.senderName || m.sender}] ${m.text}`)
               .join('\n');
             messages.push(formatted);
+            log(`Received broadcast targeted at me, processing`);
           } else {
-            // 旁观者 - 不处理，只记录日志
-            log(`Received broadcast for other profile (${data.targetProfileId}), skipping`);
+            // 旁观者 - 存储到历史，不触发回复
+            const formatted = data.messages
+              .map((m) => `[${m.senderName || m.sender}] ${m.text}`)
+              .join('\n');
+            historyContext.push(`[群组对话] ${formatted}`);
+            log(`Received broadcast for other profile (${data.targetProfileId}), storing as history`);
           }
         }
 
-        // 旁观者回复类型：记录其他 profile 的回复
+        // 旁观者回复类型：存储到历史，不触发回复
         if (data.type === 'observer_reply') {
-          const contextNote = `[旁观者记录] ${data.replyProfileName} 回复了:\n${data.replyText.slice(0, 500)}`;
-          messages.push(contextNote);
-          log(`Received observer reply from ${data.replyProfileName}`);
+          historyContext.push(`${data.replyProfileName} 回复了: ${data.replyText.slice(0, 500)}`);
+          log(`Received observer reply from ${data.replyProfileName}, storing as history`);
         }
       } catch (err) {
         log(
@@ -419,6 +435,24 @@ function drainIpcInput(myProfileId?: string): string[] {
         }
       }
     }
+
+    // 存储历史上下文到单独文件，下次触发时读取
+    if (historyContext.length > 0) {
+      const historyFile = path.join(IPC_INPUT_DIR, '_observer_history.json');
+      try {
+        let existingHistory: string[] = [];
+        if (fs.existsSync(historyFile)) {
+          existingHistory = JSON.parse(fs.readFileSync(historyFile, 'utf-8'));
+        }
+        // 合并新历史，最多保留50条
+        const merged = [...existingHistory, ...historyContext].slice(-50);
+        fs.writeFileSync(historyFile, JSON.stringify(merged, null, 2));
+        log(`Stored ${historyContext.length} history entries, total ${merged.length}`);
+      } catch (err) {
+        log(`Failed to store history: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     return messages;
   } catch (err) {
     log(`IPC drain error: ${err instanceof Error ? err.message : String(err)}`);
@@ -706,7 +740,7 @@ async function main(): Promise<void> {
   }
 
   // Resolve IPC directory based on Docker-in-Docker mode
-  IPC_INPUT_DIR = resolveIpcDir(containerInput.groupFolder);
+  IPC_INPUT_DIR = resolveIpcDir(containerInput.groupFolder, containerInput.profileId);
 
   // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
   // No real secrets exist in the container environment.
@@ -740,6 +774,22 @@ async function main(): Promise<void> {
   if (pending.length > 0) {
     log(`Draining ${pending.length} pending IPC messages into initial prompt`);
     prompt += '\n' + pending.join('\n');
+  }
+
+  // Load observer history context (conversations from other profiles)
+  const historyFile = path.join(IPC_INPUT_DIR, '_observer_history.json');
+  if (fs.existsSync(historyFile)) {
+    try {
+      const historyContext: string[] = JSON.parse(fs.readFileSync(historyFile, 'utf-8'));
+      if (historyContext.length > 0) {
+        log(`Loading ${historyContext.length} history context entries`);
+        // 清空历史文件，避免重复加载
+        fs.writeFileSync(historyFile, JSON.stringify([], null, 2));
+        prompt += '\n\n[最近的群组对话历史]\n' + historyContext.join('\n');
+      }
+    } catch (err) {
+      log(`Failed to load history context: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // Script phase: run script before waking agent

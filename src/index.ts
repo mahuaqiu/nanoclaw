@@ -159,6 +159,55 @@ function findMatchingProfile(
 }
 
 /**
+ * 将原始消息广播到所有活跃的 profile 的 IPC 目录
+ * 这样每个 profile 都能看到对话历史，即使没有被 @
+ */
+function broadcastMessageToProfiles(
+  group: RegisteredGroup,
+  messages: NewMessage[],
+  targetProfileId: string | null, // null 表示无人被 @（如群组消息）
+): void {
+  const profiles = group.profiles ?? [];
+  if (profiles.length <= 1) return; // 没有其他 profile，无需广播
+
+  for (const profile of profiles) {
+    if (profile.isActive === false) continue;
+
+    const ipcPath = resolveProfileIpcPath(group.folder, profile.id);
+    const inputDir = path.join(ipcPath, 'input');
+    try {
+      fs.mkdirSync(inputDir, { recursive: true });
+      const filename = `${Date.now()}-broadcast-${Math.random().toString(36).slice(2, 6)}.json`;
+      const filepath = path.join(inputDir, filename);
+      const tempPath = `${filepath}.tmp`;
+
+      const broadcastMessage = {
+        type: 'broadcast_message',
+        messages: messages.map((m) => ({
+          sender: m.sender,
+          senderName: m.sender_name,
+          text: m.content,
+          timestamp: m.timestamp,
+        })),
+        targetProfileId: targetProfileId,
+      };
+
+      fs.writeFileSync(tempPath, JSON.stringify(broadcastMessage));
+      fs.renameSync(tempPath, filepath);
+      logger.debug(
+        { group: group.folder, to: profile.id, targetProfileId },
+        'Broadcasted message to profile IPC',
+      );
+    } catch (err) {
+      logger.warn(
+        { group: group.folder, toProfile: profile.id, err },
+        'Failed to broadcast message to profile',
+      );
+    }
+  }
+}
+
+/**
  * 将回复同步给其他 profile（旁观者记录）
  * 写入其他活跃 profile 的 IPC 目录，以便下次启动时能看到
  */
@@ -363,6 +412,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
+
+  // 广播原始消息到所有 profile 的 IPC 目录
+  // 这样其他 profile 可以看到对话历史，即使没有被 @
+  if (!isMainGroup && group.profiles && group.profiles.length > 1) {
+    broadcastMessageToProfiles(group, missedMessages, matchedProfile?.id ?? null);
+  }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
