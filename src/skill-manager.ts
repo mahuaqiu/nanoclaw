@@ -47,11 +47,13 @@ function isValidSkillId(skillId: string): boolean {
 
 /**
  * 解析 SKILL.md 的 YAML frontmatter
+ * 支持不同平台的换行符（\n 或 \r\n）
  */
 function parseFrontmatter(
   content: string,
 ): { name: string; description: string } | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  // 兼容 Windows (\r\n) 和 Unix (\n) 换行符
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return null;
 
   const frontmatter = match[1];

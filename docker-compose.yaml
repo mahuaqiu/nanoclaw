@@ -17,6 +17,10 @@ services:
       - ./docker_volume/groups:/app/groups
       - ./docker_volume/data:/app/data
       - ./docker_volume/logs:/app/logs
+      # Skills 目录（持久化全局 skills）
+      - ./docker_volume/skills:/app/container/skills
+      # 开发模式：挂载 dist 目录（用于代码更新）
+      - ./dist:/app/dist
 
     # 暴露 HTTP API 端口（用于自建 REST 接口）
     ports:
