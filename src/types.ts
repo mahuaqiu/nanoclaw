@@ -41,6 +41,7 @@ export interface AgentProfile {
   name: string; // 显示名称
   trigger: string; // 触发词 (e.g., "@Andy", "@Tech")
   description?: string; // 角色描述
+  systemPrompt?: string; // 角色专属系统提示词 (Markdown 格式)
   containerConfig?: ContainerConfig; // 可选的独立容器配置
   isActive?: boolean; // 是否激活 (默认 true)
   addedAt: string; // 添加时间

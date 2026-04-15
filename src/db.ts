@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
+import { ASSISTANT_NAME, DATA_DIR, GROUPS_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -94,6 +94,7 @@ function createSchema(database: Database.Database): void {
       name TEXT NOT NULL,
       trigger TEXT NOT NULL,
       description TEXT,
+      system_prompt TEXT,
       container_config TEXT,
       is_active INTEGER DEFAULT 1,
       added_at TEXT NOT NULL,
@@ -204,6 +205,15 @@ function createSchema(database: Database.Database): void {
     database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
   } catch {
     /* columns already exist */
+  }
+
+  // Add system_prompt column to agent_profiles if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE agent_profiles ADD COLUMN system_prompt TEXT`,
+    );
+  } catch {
+    /* column already exists */
   }
 }
 
@@ -916,6 +926,7 @@ export function getProfiles(jid: string): AgentProfile[] {
     name: string;
     trigger: string;
     description: string | null;
+    system_prompt: string | null;
     container_config: string | null;
     is_active: number;
     added_at: string;
@@ -926,6 +937,7 @@ export function getProfiles(jid: string): AgentProfile[] {
     name: row.name,
     trigger: row.trigger,
     description: row.description ?? undefined,
+    systemPrompt: row.system_prompt ?? undefined,
     containerConfig: row.container_config
       ? JSON.parse(row.container_config)
       : undefined,
@@ -950,6 +962,7 @@ export function getProfile(
         name: string;
         trigger: string;
         description: string | null;
+        system_prompt: string | null;
         container_config: string | null;
         is_active: number;
         added_at: string;
@@ -963,6 +976,7 @@ export function getProfile(
     name: row.name,
     trigger: row.trigger,
     description: row.description ?? undefined,
+    systemPrompt: row.system_prompt ?? undefined,
     containerConfig: row.container_config
       ? JSON.parse(row.container_config)
       : undefined,
@@ -976,14 +990,15 @@ export function getProfile(
  */
 export function addProfile(jid: string, profile: AgentProfile): void {
   db.prepare(
-    `INSERT INTO agent_profiles (id, jid, name, trigger, description, container_config, is_active, added_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agent_profiles (id, jid, name, trigger, description, system_prompt, container_config, is_active, added_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     profile.id,
     jid,
     profile.name,
     profile.trigger,
     profile.description ?? null,
+    profile.systemPrompt ?? null,
     profile.containerConfig ? JSON.stringify(profile.containerConfig) : null,
     profile.isActive === false ? 0 : 1,
     profile.addedAt,
@@ -999,7 +1014,7 @@ export function updateProfile(
   updates: Partial<
     Pick<
       AgentProfile,
-      'name' | 'trigger' | 'description' | 'containerConfig' | 'isActive'
+      'name' | 'trigger' | 'description' | 'systemPrompt' | 'containerConfig' | 'isActive'
     >
   >,
 ): void {
@@ -1017,6 +1032,10 @@ export function updateProfile(
   if (updates.description !== undefined) {
     fields.push('description = ?');
     values.push(updates.description ?? null);
+  }
+  if (updates.systemPrompt !== undefined) {
+    fields.push('system_prompt = ?');
+    values.push(updates.systemPrompt ?? null);
   }
   if (updates.containerConfig !== undefined) {
     fields.push('container_config = ?');
@@ -1045,6 +1064,36 @@ export function removeProfile(jid: string, profileId: string): void {
     jid,
     profileId,
   );
+}
+
+/**
+ * Generate default system prompt for a profile
+ * Reads from groups/main/CLAUDE.md and replaces the assistant name
+ * @param profileName The name of the profile to use in the prompt
+ * @returns The system prompt with the name replaced, or undefined if no template exists
+ */
+export function generateDefaultSystemPrompt(profileName: string): string | undefined {
+  // Try to read the template from groups/main/CLAUDE.md
+  const templatePath = path.join(GROUPS_DIR, 'main', 'CLAUDE.md');
+
+  if (!fs.existsSync(templatePath)) {
+    logger.warn({ templatePath }, 'No default CLAUDE.md template found');
+    return undefined;
+  }
+
+  try {
+    const template = fs.readFileSync(templatePath, 'utf-8');
+
+    // Replace all occurrences of "Andy" with the profile name
+    // Also handle title format: "# Andy" -> "# ProfileName"
+    const prompt = template.replace(/Andy/g, profileName);
+
+    logger.info({ profileName, templatePath }, 'Generated default system prompt from template');
+    return prompt;
+  } catch (err) {
+    logger.warn({ templatePath, err }, 'Failed to read default CLAUDE.md template');
+    return undefined;
+  }
 }
 
 /**

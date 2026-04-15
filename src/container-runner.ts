@@ -34,7 +34,7 @@ import {
 } from './container-runtime.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
-import { getAssignedSkills } from './db.js';
+import { getAssignedSkills, getProfile, generateDefaultSystemPrompt } from './db.js';
 import { getGlobalSkill } from './skill-manager.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -250,6 +250,50 @@ function buildVolumeMounts(
     }
   }
 
+  // Profile-specific system prompt
+  // Write the profile's system prompt to a file for agent-runner to use
+  const profileSessionsDir = path.join(
+    DATA_DIR,
+    'sessions',
+    group.folder,
+    'profiles',
+    profileId || 'default',
+  );
+  fs.mkdirSync(profileSessionsDir, { recursive: true });
+
+  let systemPromptContent: string | undefined;
+  if (profileId && group.jid) {
+    // Get the profile from database
+    const profile = getProfile(group.jid, profileId);
+    if (profile?.systemPrompt) {
+      // Use the profile's custom system prompt
+      systemPromptContent = profile.systemPrompt;
+      logger.debug(
+        { group: group.folder, profileId },
+        'Using profile-specific system prompt',
+      );
+    } else if (profile?.name) {
+      // No custom prompt - generate default from template with profile name
+      systemPromptContent = generateDefaultSystemPrompt(profile.name);
+      logger.debug(
+        { group: group.folder, profileId, profileName: profile.name },
+        'Generated default system prompt for profile',
+      );
+    }
+  }
+
+  // Write system prompt to file if we have one
+  if (systemPromptContent) {
+    const systemPromptFile = path.join(profileSessionsDir, 'SYSTEM_PROMPT.md');
+    fs.writeFileSync(systemPromptFile, systemPromptContent, 'utf-8');
+    // Mount to container's /workspace/profile directory
+    mounts.push({
+      hostPath: systemPromptFile,
+      containerPath: '/workspace/profile/SYSTEM_PROMPT.md',
+      readonly: true,
+    });
+  }
+
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -299,6 +343,12 @@ function buildVolumeMounts(
     'agent-runner',
     'src',
   );
+  const agentRunnerTsconfig = path.join(
+    projectRoot,
+    'container',
+    'agent-runner',
+    'tsconfig.json',
+  );
   const groupAgentRunnerDir = path.join(
     DATA_DIR,
     'sessions',
@@ -315,6 +365,21 @@ function buildVolumeMounts(
         fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+    }
+  }
+  // CRITICAL: Copy agent-runner's tsconfig.json into /app/src directory.
+  // In Docker-in-Docker, volumesFromArgs() inherits the main container's /app,
+  // including /app/tsconfig.json (main project's config). TypeScript compilation
+  // would use the wrong config. By placing tsconfig.json in /app/src, tsc will
+  // find it as a sibling to the source files and use it instead of /app/tsconfig.json.
+  const cachedTsconfig = path.join(groupAgentRunnerDir, 'tsconfig.json');
+  if (fs.existsSync(agentRunnerTsconfig)) {
+    const needsCopyTsconfig =
+      !fs.existsSync(cachedTsconfig) ||
+      fs.statSync(agentRunnerTsconfig).mtimeMs >
+        fs.statSync(cachedTsconfig).mtimeMs;
+    if (needsCopyTsconfig) {
+      fs.copyFileSync(agentRunnerTsconfig, cachedTsconfig);
     }
   }
   mounts.push({
@@ -364,6 +429,16 @@ async function buildContainerArgs(
   // In Docker-in-Docker scenarios, inherit volumes from main container
   // so agent can access paths in named volumes (groups, data, sessions)
   args.push(...volumesFromArgs());
+
+  // CRITICAL: Shadow inherited /app/dist mount from main container.
+  // In Docker-in-Docker, volumesFromArgs() inherits the main container's mounts,
+  // including the development-mode ./dist:/app/dist bind mount. This would cause
+  // agent to use the main project's compiled code (which imports better-sqlite3).
+  // The explicit -v mount for /app/src (added later in mounts loop) successfully
+  // overrides the inherited /app/src, but /app/dist still inherits the main project.
+  // We use tmpfs to shadow /app/dist - entrypoint.sh will compile to /tmp/dist anyway.
+  // NOTE: This is a dev-mode workaround - production doesn't have ./dist mount.
+  args.push('--tmpfs', '/app/dist:size=10m');
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),

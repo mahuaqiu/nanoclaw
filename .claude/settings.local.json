@@ -40,7 +40,20 @@
       "Bash(sqlite3:*)",
       "Bash(node -e \"const Database = require\\('better-sqlite3'\\); const db = new Database\\('./docker_volume/store/nanoclaw.db'\\); const tables = db.prepare\\(\\\\\"SELECT name FROM sqlite_master WHERE type='table'\\\\\"\\).all\\(\\); console.log\\(JSON.stringify\\(tables\\)\\);\")",
       "Bash(grep -E \"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$\")",
-      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('docker_volume/store/messages.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT * FROM sessions'\\); rows = cursor.fetchall\\(\\); print\\(rows[:10]\\)\")"
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('docker_volume/store/messages.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\('SELECT * FROM sessions'\\); rows = cursor.fetchall\\(\\); print\\(rows[:10]\\)\")",
+      "Bash(pm2 logs:*)",
+      "Read(//var/log/**)",
+      "Bash(python -m json.tool)",
+      "Bash(MSYS_NO_PATHCONV=1 docker exec nanoclaw:*)",
+      "Bash(git restore:*)",
+      "Bash(docker start:*)",
+      "Bash(docker-compose -f D:/code/nanoclaw/docker-compose.yaml up -d)",
+      "Bash(./build.sh)",
+      "Bash(D:/code/nanoclaw/container/build.sh)",
+      "Bash(docker stop:*)",
+      "Bash(node -e \"const Database = require\\('better-sqlite3'\\); const db = new Database\\('./store/messages.db'\\); const profiles = db.prepare\\('SELECT id, jid, name, trigger, description, is_active FROM agent_profiles'\\).all\\(\\); console.log\\(JSON.stringify\\(profiles, null, 2\\)\\);\")",
+      "Bash(node -e \"const Database = require\\('better-sqlite3'\\); const db = new Database\\('./store/messages.db'\\); const groups = db.prepare\\('SELECT jid, name, folder, trigger_pattern, default_profile, is_main FROM registered_groups'\\).all\\(\\); console.log\\(JSON.stringify\\(groups, null, 2\\)\\);\")",
+      "Bash(python *)"
     ]
   }
 }

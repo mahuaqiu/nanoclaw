@@ -47,6 +47,7 @@ import {
   removeSkillAssignment,
   setRegisteredGroup,
   deleteRegisteredGroup,
+  generateDefaultSystemPrompt,
 } from '../db.js';
 import {
   listGlobalSkills,
@@ -303,37 +304,7 @@ class HttpApiChannel implements Channel {
       this.handleClearSession(req, res);
     } else if (pathname?.startsWith('/api/session/') && method === 'GET') {
       this.handleGetSession(pathname, res);
-    } else if (pathname?.startsWith('/api/profiles/') && method === 'GET') {
-      this.handleProfiles(pathname, req, res);
-    } else if (pathname?.startsWith('/api/profiles/') && method === 'POST') {
-      this.handleAddProfile(pathname, req, res);
-    } else if (
-      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) &&
-      method === 'GET'
-    ) {
-      this.handleGetProfile(pathname, res);
-    } else if (
-      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) &&
-      method === 'PUT'
-    ) {
-      this.handleUpdateProfile(pathname, req, res);
-    } else if (
-      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) &&
-      method === 'DELETE'
-    ) {
-      this.handleRemoveProfile(pathname, res);
-      // --- Global skills management ---
-    } else if (pathname === '/api/skills' && method === 'GET') {
-      this.handleListSkills(res);
-    } else if (pathname?.startsWith('/api/skills/') && method === 'GET') {
-      this.handleGetSkill(pathname, res);
-    } else if (pathname?.startsWith('/api/skills/') && method === 'POST') {
-      this.handleCreateSkill(pathname, req, res);
-    } else if (pathname?.startsWith('/api/skills/') && method === 'PUT') {
-      this.handleUpdateSkill(pathname, req, res);
-    } else if (pathname?.startsWith('/api/skills/') && method === 'DELETE') {
-      this.handleDeleteSkill(pathname, res);
-      // --- Profile skills assignment ---
+      // --- Profile skills assignment (must be BEFORE generic profile routes) ---
     } else if (
       pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+\/skills$/) &&
       method === 'GET'
@@ -349,6 +320,37 @@ class HttpApiChannel implements Channel {
       method === 'DELETE'
     ) {
       this.handleRemoveSkill(pathname, res);
+      // --- Profile management (generic routes, must be AFTER specific skill routes) ---
+    } else if (pathname?.startsWith('/api/profiles/') && method === 'GET') {
+      this.handleProfiles(pathname, req, res);
+    } else if (
+      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) &&
+      method === 'GET'
+    ) {
+      this.handleGetProfile(pathname, res);
+    } else if (
+      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) &&
+      method === 'PUT'
+    ) {
+      this.handleUpdateProfile(pathname, req, res);
+    } else if (
+      pathname?.match(/^\/api\/profiles\/[^/]+\/[^/]+$/) &&
+      method === 'DELETE'
+    ) {
+      this.handleRemoveProfile(pathname, res);
+    } else if (pathname?.startsWith('/api/profiles/') && method === 'POST') {
+      this.handleAddProfile(pathname, req, res);
+      // --- Global skills management ---
+    } else if (pathname === '/api/skills' && method === 'GET') {
+      this.handleListSkills(res);
+    } else if (pathname?.startsWith('/api/skills/') && method === 'GET') {
+      this.handleGetSkill(pathname, res);
+    } else if (pathname?.startsWith('/api/skills/') && method === 'POST') {
+      this.handleCreateSkill(pathname, req, res);
+    } else if (pathname?.startsWith('/api/skills/') && method === 'PUT') {
+      this.handleUpdateSkill(pathname, req, res);
+    } else if (pathname?.startsWith('/api/skills/') && method === 'DELETE') {
+      this.handleDeleteSkill(pathname, res);
     } else {
       res.writeHead(404);
       res.end(JSON.stringify({ error: 'Not found' }));
@@ -940,7 +942,8 @@ class HttpApiChannel implements Channel {
   ): void {
     // Extract jid from pathname - could be /api/profiles/{jid} or /api/profiles/{jid}/{profileId}
     const parts = pathname.replace('/api/profiles/', '').split('/');
-    const jid = parts[0];
+    // 自动处理 jid 格式：如果没有 http: 前缀则添加
+    const jid = parts[0].startsWith('http:') ? parts[0] : `http:${parts[0]}`;
 
     // If there's a second part, it's a profileId - redirect to handleGetProfile
     if (parts.length > 1) {
@@ -959,11 +962,22 @@ class HttpApiChannel implements Channel {
 
     const profiles = getProfiles(jid);
 
+    // Convert to API response format (snake_case field names)
+    const apiProfiles = profiles.map((p) => ({
+      id: p.id,
+      name: p.name,
+      trigger: p.trigger,
+      description: p.description,
+      system_prompt: p.systemPrompt,
+      is_active: p.isActive,
+      added_at: p.addedAt,
+    }));
+
     res.writeHead(200);
     res.end(
       JSON.stringify({
         jid,
-        profiles,
+        profiles: apiProfiles,
         count: profiles.length,
       }),
     );
@@ -971,7 +985,8 @@ class HttpApiChannel implements Channel {
 
   private handleGetProfile(pathname: string, res: http.ServerResponse): void {
     const parts = pathname.replace('/api/profiles/', '').split('/');
-    const jid = parts[0];
+    // 自动处理 jid 格式：如果没有 http: 前缀则添加
+    const jid = parts[0].startsWith('http:') ? parts[0] : `http:${parts[0]}`;
     const profileId = parts[1];
 
     const groups = this.opts.registeredGroups();
@@ -991,11 +1006,22 @@ class HttpApiChannel implements Channel {
       return;
     }
 
+    // Convert to API response format (snake_case field names)
+    const apiProfile = {
+      id: profile.id,
+      name: profile.name,
+      trigger: profile.trigger,
+      description: profile.description,
+      system_prompt: profile.systemPrompt,
+      is_active: profile.isActive,
+      added_at: profile.addedAt,
+    };
+
     res.writeHead(200);
     res.end(
       JSON.stringify({
         jid,
-        profile,
+        profile: apiProfile,
       }),
     );
   }
@@ -1006,7 +1032,9 @@ class HttpApiChannel implements Channel {
     res: http.ServerResponse,
   ): Promise<void> {
     try {
-      const jid = pathname.replace('/api/profiles/', '').split('/')[0];
+      const rawJid = pathname.replace('/api/profiles/', '').split('/')[0];
+      // 自动处理 jid 格式：如果没有 http: 前缀则添加
+      const jid = rawJid.startsWith('http:') ? rawJid : `http:${rawJid}`;
 
       const groups = this.opts.registeredGroups();
       const group = groups[jid];
@@ -1043,11 +1071,16 @@ class HttpApiChannel implements Channel {
         return;
       }
 
+      // 如果没有提供 systemPrompt，则从默认模板生成
+      // 使用 profile 的 name 替换模板中的 "Andy"
+      const systemPrompt = data.system_prompt ?? generateDefaultSystemPrompt(data.name);
+
       const profile: AgentProfile = {
         id: profileId,
         name: data.name,
         trigger: data.trigger,
         description: data.description,
+        systemPrompt,
         containerConfig: data.containerConfig,
         isActive: data.isActive !== false,
         addedAt: new Date().toISOString(),
@@ -1061,16 +1094,28 @@ class HttpApiChannel implements Channel {
           jid,
           profileId: profile.id,
           trigger: profile.trigger,
+          hasSystemPrompt: !!systemPrompt,
         },
         'Profile added',
       );
+
+      // Convert to API response format (snake_case field names)
+      const apiProfile = {
+        id: profile.id,
+        name: profile.name,
+        trigger: profile.trigger,
+        description: profile.description,
+        system_prompt: profile.systemPrompt,
+        is_active: profile.isActive,
+        added_at: profile.addedAt,
+      };
 
       res.writeHead(200);
       res.end(
         JSON.stringify({
           status: 'ok',
           jid,
-          profile,
+          profile: apiProfile,
         }),
       );
     } catch (err) {
@@ -1091,7 +1136,8 @@ class HttpApiChannel implements Channel {
   ): Promise<void> {
     try {
       const parts = pathname.replace('/api/profiles/', '').split('/');
-      const jid = parts[0];
+      // 自动处理 jid 格式：如果没有 http: 前缀则添加
+      const jid = parts[0].startsWith('http:') ? parts[0] : `http:${parts[0]}`;
       const profileId = parts[1];
 
       const groups = this.opts.registeredGroups();
@@ -1130,6 +1176,8 @@ class HttpApiChannel implements Channel {
       if (data.trigger !== undefined) updates.trigger = data.trigger;
       if (data.description !== undefined)
         updates.description = data.description;
+      if (data.system_prompt !== undefined)
+        updates.systemPrompt = data.system_prompt;
       if (data.isActive !== undefined) updates.isActive = data.isActive;
 
       updateProfile(jid, profileId, updates);
@@ -1164,7 +1212,8 @@ class HttpApiChannel implements Channel {
     res: http.ServerResponse,
   ): void {
     const parts = pathname.replace('/api/profiles/', '').split('/');
-    const jid = parts[0];
+    // 自动处理 jid 格式：如果没有 http: 前缀则添加
+    const jid = parts[0].startsWith('http:') ? parts[0] : `http:${parts[0]}`;
     const profileId = parts[1];
 
     const groups = this.opts.registeredGroups();
@@ -1335,7 +1384,8 @@ class HttpApiChannel implements Channel {
     res: http.ServerResponse,
   ): void {
     const parts = pathname.replace('/api/profiles/', '').split('/');
-    const jid = parts[0];
+    // 自动处理 jid 格式：如果没有 http: 前缀则添加
+    const jid = parts[0].startsWith('http:') ? parts[0] : `http:${parts[0]}`;
     const profileId = parts[1];
 
     const groups = this.opts.registeredGroups();
@@ -1369,7 +1419,8 @@ class HttpApiChannel implements Channel {
 
   private handleAssignSkill(pathname: string, res: http.ServerResponse): void {
     const parts = pathname.replace('/api/profiles/', '').split('/');
-    const jid = parts[0];
+    // 自动处理 jid 格式：如果没有 http: 前缀则添加
+    const jid = parts[0].startsWith('http:') ? parts[0] : `http:${parts[0]}`;
     const profileId = parts[1];
     const skillId = parts[3]; // parts[2] is 'skills'
 
@@ -1414,7 +1465,8 @@ class HttpApiChannel implements Channel {
 
   private handleRemoveSkill(pathname: string, res: http.ServerResponse): void {
     const parts = pathname.replace('/api/profiles/', '').split('/');
-    const jid = parts[0];
+    // 自动处理 jid 格式：如果没有 http: 前缀则添加
+    const jid = parts[0].startsWith('http:') ? parts[0] : `http:${parts[0]}`;
     const profileId = parts[1];
     const skillId = parts[3]; // parts[2] is 'skills'
 

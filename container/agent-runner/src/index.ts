@@ -529,11 +529,21 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
+  // Load profile-specific system prompt (primary source)
+  const profileSystemPromptPath = '/workspace/profile/SYSTEM_PROMPT.md';
+  let systemPrompt: string | undefined;
+
+  if (fs.existsSync(profileSystemPromptPath)) {
+    systemPrompt = fs.readFileSync(profileSystemPromptPath, 'utf-8');
+    log(`Loaded profile-specific system prompt from ${profileSystemPromptPath}`);
+  }
+
+  // Fallback: Load global CLAUDE.md as additional system context (shared across all groups)
+  // Only used if no profile-specific prompt exists
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-  let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+  if (!systemPrompt && !containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
+    systemPrompt = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+    log(`Loaded global system prompt from ${globalClaudeMdPath}`);
   }
 
   // Discover additional directories mounted at /workspace/extra/*
@@ -560,11 +570,11 @@ async function runQuery(
       resume: sessionId,
       resumeSessionAt: resumeAt,
       model: process.env.CLAUDE_MODEL,
-      systemPrompt: globalClaudeMd
+      systemPrompt: systemPrompt
         ? {
             type: 'preset' as const,
             preset: 'claude_code' as const,
-            append: globalClaudeMd,
+            append: systemPrompt,
           }
         : undefined,
       allowedTools: [
