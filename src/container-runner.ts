@@ -34,7 +34,11 @@ import {
 } from './container-runtime.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
-import { getAssignedSkills, getProfile, generateDefaultSystemPrompt } from './db.js';
+import {
+  getAssignedSkills,
+  getProfile,
+  generateDefaultSystemPrompt,
+} from './db.js';
 import { getGlobalSkill } from './skill-manager.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)

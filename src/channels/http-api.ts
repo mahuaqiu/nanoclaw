@@ -1073,7 +1073,8 @@ class HttpApiChannel implements Channel {
 
       // 如果没有提供 systemPrompt，则从默认模板生成
       // 使用 profile 的 name 替换模板中的 "Andy"
-      const systemPrompt = data.system_prompt ?? generateDefaultSystemPrompt(data.name);
+      const systemPrompt =
+        data.system_prompt ?? generateDefaultSystemPrompt(data.name);
 
       const profile: AgentProfile = {
         id: profileId,

@@ -209,9 +209,7 @@ function createSchema(database: Database.Database): void {
 
   // Add system_prompt column to agent_profiles if it doesn't exist (migration for existing DBs)
   try {
-    database.exec(
-      `ALTER TABLE agent_profiles ADD COLUMN system_prompt TEXT`,
-    );
+    database.exec(`ALTER TABLE agent_profiles ADD COLUMN system_prompt TEXT`);
   } catch {
     /* column already exists */
   }
@@ -1014,7 +1012,12 @@ export function updateProfile(
   updates: Partial<
     Pick<
       AgentProfile,
-      'name' | 'trigger' | 'description' | 'systemPrompt' | 'containerConfig' | 'isActive'
+      | 'name'
+      | 'trigger'
+      | 'description'
+      | 'systemPrompt'
+      | 'containerConfig'
+      | 'isActive'
     >
   >,
 ): void {
@@ -1072,7 +1075,9 @@ export function removeProfile(jid: string, profileId: string): void {
  * @param profileName The name of the profile to use in the prompt
  * @returns The system prompt with the name replaced, or undefined if no template exists
  */
-export function generateDefaultSystemPrompt(profileName: string): string | undefined {
+export function generateDefaultSystemPrompt(
+  profileName: string,
+): string | undefined {
   // Try to read the template from groups/main/CLAUDE.md
   const templatePath = path.join(GROUPS_DIR, 'main', 'CLAUDE.md');
 
@@ -1088,10 +1093,16 @@ export function generateDefaultSystemPrompt(profileName: string): string | undef
     // Also handle title format: "# Andy" -> "# ProfileName"
     const prompt = template.replace(/Andy/g, profileName);
 
-    logger.info({ profileName, templatePath }, 'Generated default system prompt from template');
+    logger.info(
+      { profileName, templatePath },
+      'Generated default system prompt from template',
+    );
     return prompt;
   } catch (err) {
-    logger.warn({ templatePath, err }, 'Failed to read default CLAUDE.md template');
+    logger.warn(
+      { templatePath, err },
+      'Failed to read default CLAUDE.md template',
+    );
     return undefined;
   }
 }
